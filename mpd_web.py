@@ -770,27 +770,24 @@ def get_status():
     if not s['audio_format'] and get_selected_service()=='owntone':
         try:
             player_info=owntone_api('GET','/api/player')
-            quality=player_info.get('item_quality') or player_info.get('quality','')
-            if quality:
-                q=quality.lower().replace('kbit/s','kbps').replace(' ','')
-                parts=[p.strip() for p in quality.split('|')]
-                fmt_parts=[]
-                for p in parts:
-                    p=p.strip()
-                    if 'hz' in p.lower():
-                        hz=int(re.search(r'\d+',p).group())
-                        if hz>=1000: fmt_parts.append(f"{hz/1000:.1f}kHz")
-                        else: fmt_parts.append(f"{hz}Hz")
-                    elif 'bit' in p.lower() or re.match(r'^\d+bit$',p.lower()):
-                        fmt_parts.append(p.replace(' ',''))
-                    elif p.lower() in ('mono','stereo','5.1','7.1'):
-                        fmt_parts.append(p.capitalize())
-                    elif 'kbps' in p.lower() or 'kbit' in p.lower():
-                        fmt_parts.append(re.sub(r'\s*kbit/s?\s*','kbps',p))
-                    elif p and p.lower() not in ('mp3','flac','wav','aac','ogg','m4a'):
-                        fmt_parts.append(p)
-                if fmt_parts: s['audio_format']=' | '.join(fmt_parts)
-                else: s['audio_format']=quality
+            current_item_id=player_info.get('item_id')
+            if current_item_id:
+                queue_info=owntone_api('GET','/api/queue')
+                items=queue_info.get('items',[])
+                for item in items:
+                    if item.get('id')==current_item_id:
+                        sr=item.get('samplerate',0)
+                        br=item.get('bitrate',0)
+                        ch=item.get('channels',0)
+                        fmt_parts=[]
+                        if sr>=1000: fmt_parts.append(f"{sr/1000:.1f}kHz")
+                        elif sr>0: fmt_parts.append(f"{sr}Hz")
+                        ch_map={1:'Mono',2:'Stereo',6:'5.1',8:'7.1'}
+                        if ch in ch_map: fmt_parts.append(ch_map[ch])
+                        elif ch>0: fmt_parts.append(f"{ch}ch")
+                        if br>0: fmt_parts.append(f"{br}kbps")
+                        s['audio_format']=' | '.join(fmt_parts) if fmt_parts else ''
+                        break
         except Exception:
             pass
     am=re.search(r'audio:\s*(\d+):(\d+):(\d+)',status_text)
