@@ -767,6 +767,32 @@ def get_status():
     s['volume']=int(m.group(1)) if m else 0
     s['repeat']='repeat: on' in status_text
     s['random']='random: on' in status_text
+    if not s['audio_format'] and get_selected_service()=='owntone':
+        try:
+            player_info=owntone_api('GET','/api/player')
+            quality=player_info.get('item_quality') or player_info.get('quality','')
+            if quality:
+                q=quality.lower().replace('kbit/s','kbps').replace(' ','')
+                parts=[p.strip() for p in quality.split('|')]
+                fmt_parts=[]
+                for p in parts:
+                    p=p.strip()
+                    if 'hz' in p.lower():
+                        hz=int(re.search(r'\d+',p).group())
+                        if hz>=1000: fmt_parts.append(f"{hz/1000:.1f}kHz")
+                        else: fmt_parts.append(f"{hz}Hz")
+                    elif 'bit' in p.lower() or re.match(r'^\d+bit$',p.lower()):
+                        fmt_parts.append(p.replace(' ',''))
+                    elif p.lower() in ('mono','stereo','5.1','7.1'):
+                        fmt_parts.append(p.capitalize())
+                    elif 'kbps' in p.lower() or 'kbit' in p.lower():
+                        fmt_parts.append(re.sub(r'\s*kbit/s?\s*','kbps',p))
+                    elif p and p.lower() not in ('mp3','flac','wav','aac','ogg','m4a'):
+                        fmt_parts.append(p)
+                if fmt_parts: s['audio_format']=' | '.join(fmt_parts)
+                else: s['audio_format']=quality
+        except Exception:
+            pass
     am=re.search(r'audio:\s*(\d+):(\d+):(\d+)',status_text)
     bm=re.search(r'bitrate:\s*(\d+)\s*kbps',status_text)
     if am:
@@ -1414,8 +1440,8 @@ button{cursor:pointer}
 .artwork.playing+.tonearm{transform:rotate(-12deg)}
 @keyframes turn{to{transform:rotate(360deg)}}
 .track-title{max-width:800px;font-size:clamp(22px,3vw,36px);line-height:1.35;font-weight:700;overflow-wrap:anywhere}
-.track-sub{margin-top:8px;color:var(--muted);font-size:15px}
-.track-audio-format{margin-top:4px;color:var(--accent);font-size:11px;letter-spacing:.5px;opacity:.8}
+.track-sub{margin-top:8px;color:var(--muted);font-size:15px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.audio-format-inline{color:var(--accent);font-size:11px;letter-spacing:.5px;opacity:.8}
 .track-pos{margin-top:18px;color:#7f8186;font-size:12px;letter-spacing:1px}
 .controls{display:flex;align-items:center;gap:24px;margin-top:28px}
 .icon-btn{width:42px;height:42px;border:0;background:transparent;color:#c1c3c6;font-size:21px;transition:color .18s,transform .18s}
@@ -1619,8 +1645,7 @@ button{cursor:pointer}
   <section class="listen">
     <div class="turntable"><div class="artwork" id="artwork"><div class="art-label" id="artlabel">MPD<br>PLAYER</div><img class="cover-image" id="cover" alt="当前歌曲专辑封面" onload="coverLoaded()" onerror="coverMissing()"></div><div class="tonearm" aria-hidden="true"><span class="tonearm-pivot"></span><span class="tonearm-shaft"></span><span class="tonearm-head"></span></div></div>
     <div class="track-title" id="sn">未播放</div>
-    <div class="track-sub" id="sm">--:-- / --:--</div>
-    <div class="track-audio-format" id="audioFormat"></div>
+    <div class="track-sub" id="sm"><span id="playStatus">--:-- / --:--</span><span id="audioFormat" class="audio-format-inline"></span></div>
     <div class="track-pos" id="trackpos">MPD MUSIC LIBRARY</div>
     <div class="controls">
       <button class="icon-btn" id="brn" title="随机播放" onclick="cmd('random')">⤨</button>
@@ -2505,8 +2530,8 @@ async function rd(){
   document.getElementById('sn').textContent=s.song||'未播放';
   const times=(s.time||'0:00 / 0:00').split(' / ');
   document.getElementById('duration').textContent=times[1]||'0:00';
-  document.getElementById('sm').textContent=s.state==='playing'?'正在播放':'MPD 音乐库';
-  document.getElementById('audioFormat').textContent=s.audio_format||'';
+  document.getElementById('playStatus').textContent=s.state==='playing'?'正在播放':'MPD 音乐库';
+  document.getElementById('audioFormat').textContent=s.audio_format?' · '+s.audio_format:'';
   document.getElementById('trackpos').textContent=s.pos?'播放列表 '+s.pos:'MPD MUSIC LIBRARY';
   const playButton=document.getElementById('pb');
   playButton.textContent=s.state==='playing'?'⏸':'▶';
