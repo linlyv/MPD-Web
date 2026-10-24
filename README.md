@@ -75,27 +75,44 @@ mpd --version
 
 输出中应包含 `httpd` 输出插件和 `lame` 编码器。如果缺少，需安装对应的 MPD 插件包。
 
-### 3. 安装 OwnTone（可选）
+### 3. 安装 OwnTone（可选，Docker 方式）
 
-OwnTone（原名 forked-daapd）是另一款音乐服务器，支持 AirPlay 和 MPD 协议，可与 MPD 共存。
+OwnTone（原名 forked-daapd）是另一款音乐服务器，支持 AirPlay 和 MPD 协议，可通过 Docker 与 MPD 共存。
 
 ```sh
-# 安装 OwnTone
-apk add owntone
-
-# 编辑配置文件 /etc/owntone.conf，关键配置项：
-#   general.uid = "owntone"
-#   library.directories = { "/你的音乐目录" }
-#   mpd.port = 6600                         # MPD 兼容端口（不能与 MPD 的 6601 冲突）
-#   websocket_port = 3688
-#   allow_modifying_stored_playlists = true  # 必须开启，否则网页端无法保存歌单
+# 拉取并运行 OwnTone Docker 容器
+docker run -d \
+  --name owntone \
+  --net=host \
+  -v /你的音乐目录:/music:ro \
+  -v /etc/owntone.conf:/etc/owntone.conf \
+  -v /var/cache/owntone:/var/cache/owntone \
+  --restart unless-stopped \
+  jc21/owntone:latest
 ```
 
-确保 OwnTone 与 MPD 使用**相同的歌单目录**（在 `owntone.conf` 中配置），这样两种服务模式下的歌单才能互通。
+> 使用 `--net=host` 让容器直接使用宿主机网络，以便 MPD Web 通过 `127.0.0.1` 访问 OwnTone 的 MPD 兼容端口和 API 端口。
+
+**`/etc/owntone.conf` 关键配置项**（在宿主机上创建该文件后挂载进容器）：
+
+```conf
+general {
+    uid = "owntone"
+}
+library {
+    directories = { "/music" }
+}
+mpd {
+    port = 6600                            # MPD 兼容端口，不能与 MPD 的 6601 冲突
+}
+# WebSocket 端口默认 3688，JSON API 默认 3689
+allow_modifying_stored_playlists = true     # 必须开启，否则网页端无法保存歌单
+```
+
+确保 OwnTone 与 MPD 使用**相同的歌单目录**（映射到容器内同一路径），这样两种服务模式下的歌单才能互通。
 
 ```sh
-/etc/init.d/owntone enable
-/etc/init.d/owntone start
+docker restart owntone
 ```
 
 > **提示**：如果不需要 OwnTone，跳过此步骤。网页顶部仍可选择 MPD 模式正常工作。
