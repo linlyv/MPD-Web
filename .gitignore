@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+
+# 音乐文件 (太大，不上传)
+*.mp3
+*.flac
+*.wav
+*.aac
+*.ogg
+
+# APK 安装包
+*.apk
+
+# 编译好的二进制程序
+mpd
+mpd-web
+
+# 系统文件
+.DS_Store
+Thumbs.db
