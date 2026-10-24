@@ -1,0 +1,334 @@
+# MPD Studio — 私人音乐播放器 & ADB 控制台
+
+一个运行在 **iStoreOS / OpenWrt** 上的轻量级 Web 音乐播放器，基于 **MPD**（Music Player Daemon），提供唱片风格界面、LRC 歌词显示、歌单管理、USB 声卡配置、HTTP 音频流，以及内置的 **ADB 控制台**用于远程操控 Android 电视。
+
+---
+
+## 功能概览
+
+- **唱片风格播放界面** — 旋转黑胶唱片动画、专辑封面、播放进度条
+- **LRC 歌词** — 自动加载同名 `.lrc` 歌词，支持时间微调和字号缩放
+- **MPD / OwnTone 双服务切换** — 顶部可切换音乐后台
+- **HTTP 音频流** — 通过 MPD 的 `httpd` 输出在浏览器中直接收听，支持自动重连
+- **USB 声卡自动配置** — 检测 USB 音频设备并一键写入 `/etc/mpd.conf`，重启 MPD 生效
+- **歌单管理** — 保存队列、导入 M3U 歌单、添加/删除单曲
+- **媒体库浏览** — 搜索、排序（文件名/大小/时间）、整库入队
+- **登录认证** — 通过环境变量配置用户名密码，保护控制台不被未授权访问
+- **背景图自定义** — 上传本地图片作为页面背景
+- **ADB 控制台** — 连接 Android 电视、截图预览、安装 APK、发送遥控按键、启动应用、自定义 ADB 指令
+
+---
+
+## 环境要求
+
+| 软件 | 版本 / 说明 |
+|------|------------|
+| **iStoreOS / OpenWrt** | ARM 架构（如 NanoPi R1、R2S 等） |
+| **Python 3** | 3.8+ 推荐 |
+| **Flask** | `pip install flask`（Python Web 框架） |
+| **mpc** | MPD 命令行客户端（`apk add mpc`） |
+| **MPD** | Music Player Daemon，需编译 `httpd` 和 `lame` 支持 |
+| **adb**（可选） | Android Debug Bridge，用于 ADB 控制台功能 |
+
+---
+
+## 文件说明
+
+| 文件 | 用途 |
+|------|------|
+| `mpd_web.py` | Flask 主程序，包含全部后端 API 和前端界面 |
+| `login.html` | 登录页面模板（与主程序放在同一目录） |
+| `adb.html` | ADB 控制台页面模板（与主程序放在同一目录） |
+| `mpd.conf` | MPD 配置文件示例（部署到 `/etc/mpd.conf`） |
+| `mpd-web_env.txt` | 环境变量配置示例 |
+
+---
+
+## 安装与部署
+
+### 1. 安装系统依赖
+
+在 iStoreOS SSH 终端中执行：
+
+```sh
+# 更新软件源
+apk update
+
+# 安装 MPD 及客户端工具
+apk add mpd mpc
+
+# 安装 ADB（可选）
+apk add adb
+
+# 安装 Python 和 Flask
+apk add python3 py3-pip
+pip install flask
+```
+
+### 2. 验证 MPD 功能
+
+确认 MPD 已编译 `httpd` 和 `lame` 支持：
+
+```sh
+mpd --version
+```
+
+输出中应包含 `httpd` 输出插件和 `lame` 编码器。如果缺少，需安装对应的 MPD 插件包。
+
+### 3. 部署 MPD 配置
+
+将仓库中的 `mpd.conf` 复制到 `/etc/mpd.conf`，根据实际环境修改以下路径：
+
+- `music_directory` — 音乐文件存放目录
+- `playlist_directory` — 歌单存放目录
+- `audio_output` 中的 `device` — USB 声卡设备号
+
+```sh
+cp mpd.conf /etc/mpd.conf
+/etc/init.d/mpd restart
+```
+
+### 4. 部署 Web 程序
+
+将以下三个文件复制到 iStoreOS 的同一目录（如 `/root/mpd/`）：
+
+```sh
+mkdir -p /root/mpd
+# 将 mpd_web.py、login.html、adb.html 上传到 /root/mpd/
+```
+
+### 5. 配置登录凭据
+
+生成随机 session 密钥：
+
+```sh
+python3 -c 'import secrets; print(secrets.token_hex(32))'
+```
+
+创建环境变量文件 `/etc/mpd-web.env`：
+
+```sh
+umask 077
+cat > /etc/mpd-web.env <<'EOF'
+MPD_WEB_USERNAME='admin'
+MPD_WEB_PASSWORD='你的密码'
+MPD_WEB_SECRET_KEY='上面生成的随机密钥'
+MPD_HOST='127.0.0.1'
+MPD_PORT='6601'
+OWNTONE_HOST='127.0.0.1'
+OWNTONE_PORT='6600'
+OWNTONE_API_PORT='3689'
+EOF
+chmod 600 /etc/mpd-web.env
+```
+
+### 6. 创建启动服务脚本
+
+创建 `/etc/init.d/mpd-web`：
+
+```sh
+#!/bin/sh /etc/rc.common
+
+START=95
+STOP=10
+USE_PROCD=1
+
+APP="/root/mpd/mpd_web.py"
+PYTHON="/usr/bin/python3"
+
+start_service() {
+    [ -r /etc/mpd-web.env ] || return 1
+    . /etc/mpd-web.env
+
+    procd_open_instance
+    procd_set_param command "$PYTHON" "$APP"
+    procd_set_param env \
+        "MPD_WEB_USERNAME=$MPD_WEB_USERNAME" \
+        "MPD_WEB_PASSWORD=$MPD_WEB_PASSWORD" \
+        "MPD_WEB_SECRET_KEY=$MPD_WEB_SECRET_KEY" \
+        "MPD_HOST=$MPD_HOST" \
+        "MPD_PORT=$MPD_PORT" \
+        "OWNTONE_HOST=$OWNTONE_HOST" \
+        "OWNTONE_PORT=$OWNTONE_PORT" \
+        "OWNTONE_API_PORT=$OWNTONE_API_PORT"
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+}
+```
+
+赋予执行权限并启动：
+
+```sh
+chmod +x /etc/init.d/mpd-web
+/etc/init.d/mpd-web enable
+/etc/init.d/mpd-web start
+```
+
+### 7. 访问
+
+在浏览器中打开：
+
+```
+http://iStoreOS地址:8800/
+```
+
+ADB 控制台：
+
+```
+http://iStoreOS地址:8800/adb
+```
+
+---
+
+## 环境变量说明
+
+| 变量名 | 必填 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `MPD_WEB_USERNAME` | 是 | — | 登录账号 |
+| `MPD_WEB_PASSWORD` | 是 | — | 登录密码 |
+| `MPD_WEB_SECRET_KEY` | 是 | — | Flask session 加密密钥（需固定，不要每次重启更换） |
+| `MPD_HOST` | 否 | `127.0.0.1` | MPD 服务地址 |
+| `MPD_PORT` | 否 | `6601` | MPD 服务端口 |
+| `OWNTONE_HOST` | 否 | `127.0.0.1` | OwnTone 服务地址 |
+| `OWNTONE_PORT` | 否 | `6600` | OwnTone MPD 兼容端口 |
+| `OWNTONE_API_PORT` | 否 | `3689` | OwnTone JSON API 端口 |
+
+---
+
+## 播放器 API 接口
+
+所有 API 均需登录后才能访问。
+
+| 路由 | 方法 | 用途 |
+|------|------|------|
+| `/api/status` | GET | 获取播放状态（歌曲、进度、音量、循环/随机） |
+| `/api/cover?uri=` | GET | 获取当前歌曲专辑封面 |
+| `/api/lyrics?uri=` | GET | 获取当前歌曲 LRC 歌词 |
+| `/api/library` | GET | 获取完整音乐文件列表（含大小、时间） |
+| `/api/control/<cmd>` | GET | 播放控制：play / pause / toggle / stop / next / prev / repeat / random |
+| `/api/volume/<0-100>` | GET | 设置音量 |
+| `/api/seek` | POST | 跳转到指定进度（`{"percent": 50}`） |
+| `/api/play` | POST | 播放指定 URI 的歌曲 |
+| `/api/queue/play` | POST | 播放队列中指定位置的歌曲 |
+| `/api/add` | POST | 添加歌曲到队列 |
+| `/api/add-all` | GET | 整库入队 |
+| `/api/clear` | GET | 清空播放队列 |
+| `/api/playlists` | GET | 获取歌单列表 |
+| `/api/playlists/save` | POST | 保存当前队列为歌单 |
+| `/api/playlists/import` | POST | 导入 M3U 歌单文件 |
+| `/api/playlists/load` | POST | 载入并播放歌单 |
+| `/api/playlists/delete` | POST | 删除歌单 |
+| `/api/playlists/<name>/tracks` | GET | 获取歌单歌曲列表 |
+| `/api/playlists/addtrack` | POST | 添加歌曲到歌单 |
+| `/api/playlists/removetrack` | POST | 从歌单移除歌曲 |
+| `/api/playlists/playtrack` | POST | 播放歌单中指定歌曲 |
+| `/api/service` | GET/POST | 切换/获取音乐服务（MPD / OwnTone） |
+| `/api/audio` | GET | 获取 USB 设备列表和 MPD 输出状态 |
+| `/api/audio/select` | POST | 切换 MPD 输出开关 |
+| `/api/audio/configure` | POST | 自动检测并配置 USB 声卡到 `/etc/mpd.conf` |
+| `/api/background` | GET | 获取自定义背景图 |
+| `/api/background` | POST | 上传背景图（最大 8MB） |
+| `/api/background` | DELETE | 删除背景图 |
+| `/logout` | POST | 退出登录 |
+
+---
+
+## ADB 控制台
+
+ADB 控制台页面 (`/adb`) 支持以下功能：
+
+- **连接/断开设备** — 输入电视 IP 和端口
+- **应用管理** — 列出第三方/全部应用包名、启动应用
+- **发送遥控按键** — 方向键、确认、返回、主页、音量等
+- **打开网址** — 在电视浏览器中打开 URL
+- **截图预览** — 实时获取电视截图（约 1.2 秒刷新）
+- **上传安装 APK** — 从浏览器上传 APK 安装到电视（最大 256MB）
+- **自定义 ADB 指令** — 支持 shell、install、uninstall、push、pull、logcat、reboot 子命令
+- **指令历史** — 保存并导出 ADB 操作记录
+
+### ADB API
+
+| 路由 | 方法 | 用途 |
+|------|------|------|
+| `/api/adb/devices` | GET | 列出已连接设备 |
+| `/api/adb/connect` | POST | 连接设备 |
+| `/api/adb/disconnect` | POST | 断开设备 |
+| `/api/adb/apps` | POST | 列出设备应用 |
+| `/api/adb/open-url` | POST | 在设备上打开网址 |
+| `/api/adb/launch-app` | POST | 启动设备应用 |
+| `/api/adb/key` | POST | 发送遥控按键 |
+| `/api/adb/install-apk` | POST | 上传并安装 APK |
+| `/api/adb/command` | POST | 自定义 ADB 指令 |
+| `/api/adb/screenshot` | GET | 获取设备截图 |
+
+---
+
+## HTTP 音频流配置
+
+MPD 的 HTTP 音频流通过 `mpd.conf` 中的 `httpd` 输出配置：
+
+```
+audio_output {
+    type            "httpd"
+    name            "MPD HTTP Stream"
+    encoder         "lame"
+    port            "8000"
+    bind_to_address "0.0.0.0"
+    bitrate         "192"
+    format          "44100:16:2"
+    max_clients     "4"
+    enabled         "yes"
+}
+```
+
+流地址：`http://iStoreOS地址:8000/`
+
+网页播放器会自动连接此流并在浏览器中播放。HTTP 流默认对歌词和进度有约 6 秒缓冲补偿，可通过歌词栏的 ±0.5s 按钮微调。
+
+---
+
+## 歌词格式
+
+程序支持标准的 `.lrc` 歌词文件。歌词文件需与音乐文件同名（扩展名为 `.lrc`），放在同一目录下。
+
+支持编码：UTF-8（含 BOM）、GB18030、Big5。
+
+示例格式：
+
+```
+[00:15.20]第一句歌词
+[00:25.40]第二句歌词
+[offset:+500]
+```
+
+---
+
+## 安全提醒
+
+- **不要将 8800（Flask）、8000（HTTP 流）、5555（ADB）端口映射到公网**
+- 如需外网访问，建议先连接 WireGuard 等 VPN
+- 登录凭据存储在 `/etc/mpd-web.env`（权限 600），不要提交到代码仓库
+- 仅对可信用户开放 ADB 控制台
+
+---
+
+## 常见问题
+
+**Q: 登录页提示"尚未配置登录凭据"**
+> 检查 `/etc/init.d/mpd-web` 是否读取了 `/etc/mpd-web.env`，并通过 `procd_set_param env` 传入了三个必需的环境变量。
+
+**Q: 登录后反复跳回登录页**
+> 检查 `MPD_WEB_SECRET_KEY` 是否每次都一致（不要每次启动重新生成），并确认浏览器允许 session cookie。
+
+**Q: ADB 页面显示没有设备**
+> 在 iStoreOS SSH 终端执行 `adb connect 电视IP:5555`，检查电视是否弹出授权提示，以及运行 Flask 的用户能否执行 `adb`。
+
+**Q: HTTP 流没有声音**
+> 检查 MPD 是否编译了 `httpd` 和 `lame` 支持（`mpd --version`），确认 `mpd.conf` 中 `httpd` 输出的 `enabled` 为 `yes`。
+
+**Q: 封面不显示**
+> 程序按以下优先级查找封面：MPD `readpicture`/`albumart` → 同目录 `cover.jpg`/`folder.jpg` 等 → 音频文件内嵌 ID3 图片。
+
+**Q: 如何查看 MPD-Web 服务日志**
+> `logread -e mpd-web`
