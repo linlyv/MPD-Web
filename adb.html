@@ -51,7 +51,7 @@ main{max-width:1320px;margin:0 auto;padding:34px 24px 60px}.intro{display:flex;j
         </div>
       </section>
       <section class="panel">
-        <div class="panel-head"><h2>已安装应用</h2><small>点“启动”打开对应应用</small></div>
+        <div class="panel-head"><h2>已安装应用</h2><small>点"启动"打开，点"卸载"移除</small></div>
         <div class="panel-body">
           <div class="subhead"><h3>应用包名</h3><label class="check"><input id="thirdParty" type="checkbox" checked>仅第三方应用</label></div>
           <input id="appSearch" class="search" type="search" placeholder="筛选包名..." autocomplete="off">
@@ -66,6 +66,20 @@ main{max-width:1320px;margin:0 auto;padding:34px 24px 60px}.intro{display:flex;j
             <button class="btn btn-primary" id="installApk" type="submit">上传并安装</button>
           </form>
           <p class="form-note">APK 会先传到运行网页的 iStoreOS，再由 ADB 安装到当前选中的电视；安装后会删除服务端临时副本。</p>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><h2>WiFi 配置</h2><small>查看和配置设备网络</small></div>
+        <div class="panel-body">
+          <button class="btn btn-primary" id="wifiInfoBtn" type="button" style="margin-bottom:12px">查看当前 WiFi 信息</button>
+          <div id="wifiInfo" style="display:none;margin-bottom:16px;padding:12px;background:#f8faf6;border:1px solid #e6ebe2;border-radius:4px;font-size:12px;line-height:1.8"></div>
+          <form id="wifiConfigForm" class="url-actions" style="border-top:1px solid #edf0eb;padding-top:14px">
+            <label class="field"><span class="field-label">WiFi 名称（SSID）</span><input id="wifiSsid" type="text" placeholder="输入要连接的 WiFi 名称" required></label>
+            <label class="field"><span class="field-label">密码</span><input id="wifiPassword" type="text" placeholder="留空则连接开放网络"></label>
+            <label class="field"><span class="field-label">加密类型</span><select id="wifiType"><option value="WPA" selected>WPA/WPA2</option><option value="WEP">WEP</option><option value="OPEN">无加密（开放）</option></select></label>
+            <button class="btn btn-lime" id="configWifiBtn" type="submit">配网 / 连接 WiFi</button>
+          </form>
+          <p class="form-note" style="margin-top:10px">配网功能会自动下载并安装 adb-join-wifi 工具，然后发送 Intent 让设备连接指定 WiFi。适用于 R1 等需要配网的设备。</p>
         </div>
       </section>
     </div>
@@ -234,13 +248,18 @@ async function loadApps(){
   data.packages.forEach(name=>{
     const row=document.createElement('div');row.className='app-row';
     const label=document.createElement('span');label.className='app-name';label.textContent=name;
+    const actions=document.createElement('div');actions.style.display='flex;gap:6px';
     const launch=document.createElement('button');launch.className='app-launch';launch.textContent='启动';launch.onclick=()=>launchApp(name);
-    row.append(label,launch);apps.appendChild(row);
+    const uninstall=document.createElement('button');uninstall.className='app-launch';uninstall.style.color='#a63f37';uninstall.style.borderColor='#fae9e5';uninstall.textContent='卸载';uninstall.onclick=()=>uninstallApp(name);
+    actions.append(launch,uninstall);row.append(label,actions);apps.appendChild(row);
   });
   filterApps();toast('读取到 '+data.packages.length+' 个应用');
 }
 function filterApps(){const query=document.getElementById('appSearch').value.trim().toLowerCase();document.querySelectorAll('.app-row').forEach(row=>row.hidden=!row.querySelector('.app-name').textContent.toLowerCase().includes(query));}
 async function launchApp(packageName){const serial=selectedSerial();if(!serial){toast('请先选择设备');return;}const data=await requestApi('/api/adb/launch-app',{method:'POST',body:{serial,package:packageName}});if(!data.httpOk)toast(data.output||data.error||'启动失败');}
+async function uninstallApp(packageName){const serial=selectedSerial();if(!serial){toast('请先选择设备');return;}if(!confirm('确定要卸载 '+packageName+' 吗？此操作不可撤销！'))return;const data=await requestApi('/api/adb/uninstall-app',{method:'POST',body:{serial,package:packageName}});if(data.httpOk&&data.ok!==false){toast('卸载成功：'+packageName);loadApps();}else{toast(data.output||data.error||'卸载失败');}}
+async function getWifiInfo(){const serial=selectedSerial();if(!serial){toast('请先选择设备');return;}const btn=document.getElementById('wifiInfoBtn');btn.disabled=true;btn.textContent='查询中...';const data=await requestApi('/api/adb/wifi-info',{method:'POST',body:{serial}});btn.disabled=false;btn.textContent='查看当前 WiFi 信息';if(!data.httpOk){toast(data.output||data.error||'获取 WiFi 信息失败');return;}const info=data.wifi_info||{};const el=document.getElementById('wifiInfo');el.style.display='block';el.innerHTML='<strong>SSID:</strong> '+(info.ssid||'未连接')+'<br><strong>IP:</strong> '+(info.ip||'-')+'<br><strong>MAC:</strong> '+(info.mac||'-')+'<br><strong>BSSID:</strong> '+(info.bssid||'-')+'<br><strong>频率:</strong> '+(info.frequency||'-')+'<br><strong>速率:</strong> '+(info.link_speed||'-')+'<br><strong>信号强度:</strong> '+(info.rssi||'-');}
+async function configWifi(e){e.preventDefault();const serial=selectedSerial();if(!serial){toast('请先选择设备');return;}const ssid=document.getElementById('wifiSsid').value.trim();const password=document.getElementById('wifiPassword').value.trim();const passwordType=document.getElementById('wifiType').value;if(!ssid){toast('请输入 WiFi 名称');return;}const btn=document.getElementById('configWifiBtn');btn.disabled=true;btn.textContent='配网中...';const data=await requestApi('/api/adb/config-wifi',{method:'POST',body:{serial,ssid,password,password_type:passwordType}});btn.disabled=false;btn.textContent='配网 / 连接 WiFi';if(data.httpOk&&data.ok!==false){toast('WiFi 配置已发送，请等待设备连接...');}else{toast(data.output||data.error||'配网失败');}}
 async function sendKey(key){const serial=selectedSerial();if(!serial){toast('请先选择设备');return;}const data=await requestApi('/api/adb/key',{method:'POST',body:{serial,key}});if(!data.httpOk)toast(data.output||data.error||'按键发送失败');}
 async function runCustomCommand(command){
   const serial=selectedSerial();if(!serial){toast('请先选择设备');return;}
@@ -332,6 +351,8 @@ document.getElementById('packageForm').addEventListener('submit',async event=>{e
 document.getElementById('apkForm').addEventListener('submit',async event=>{event.preventDefault();await uploadApk(document.getElementById('apkFile').files[0]);});
 document.getElementById('commandForm').addEventListener('submit',async event=>{event.preventDefault();await runCustomCommand(document.getElementById('customCommand').value.trim());});
 document.getElementById('commandGuide').addEventListener('click',event=>{const button=event.target.closest('[data-fill]');if(!button)return;const input=document.getElementById('customCommand');input.value=button.dataset.fill;input.focus();input.scrollIntoView({behavior:'smooth',block:'center'});});
+document.getElementById('wifiInfoBtn').addEventListener('click',getWifiInfo);
+document.getElementById('wifiConfigForm').addEventListener('submit',configWifi);
 document.querySelectorAll('[data-key]').forEach(button=>button.addEventListener('click',()=>sendKey(button.dataset.key)));
 document.getElementById('clearHistory').onclick=()=>{historyItems=[];localStorage.removeItem(historyKey);renderHistory();};
 document.getElementById('exportHistory').onclick=()=>{const blob=new Blob([JSON.stringify(historyItems,null,2)],{type:'application/json'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='adb-command-history.json';link.click();URL.revokeObjectURL(link.href);};
