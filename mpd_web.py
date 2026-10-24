@@ -347,12 +347,24 @@ def api_adb_apps():
   if data.get('third_party'):
     args.append('-3')
   result, status = run_adb(*args)
-  if status != 200:
-    return jsonify(result), status
-  result['packages'] = sorted(
-    (line.partition(':')[2].strip() for line in result['output'].splitlines() if line.startswith('package:')),
-    key=str.casefold,
-  )
+  if status != 200 or 'error: closed' in (result.get('output') or '').lower():
+    args = ['-s', serial, 'shell', 'dumpsys', 'package']
+    result, status = run_adb(*args)
+    if status != 200:
+      return jsonify(result), status
+    packages = set()
+    for line in result['output'].splitlines():
+      m = re.match(r'\s*Package\s+\[([^\]]+)\]', line)
+      if m:
+        pkg = m.group(1)
+        if not data.get('third_party') or (not pkg.startswith('android.') and not pkg.startswith('com.android.') and not pkg.startswith('com.google.')):
+          packages.add(pkg)
+    result['packages'] = sorted(packages, key=str.casefold)
+  else:
+    result['packages'] = sorted(
+      (line.partition(':')[2].strip() for line in result['output'].splitlines() if line.startswith('package:')),
+      key=str.casefold,
+    )
   return jsonify(result)
 
 @app.route('/api/adb/open-url', methods=['POST'])
@@ -501,77 +513,6 @@ def api_adb_uninstall_app():
   if not re.fullmatch(r'[A-Za-z0-9_.]+', package):
     return jsonify(ok=False, error='应用包名格式无效'), 400
   return adb_json_result(run_adb('-s', serial, 'shell', 'pm', 'uninstall', package))
-
-@app.route('/api/adb/wifi-info', methods=['POST'])
-def api_adb_wifi_info():
-  data = request.get_json(silent=True) or {}
-  serial = valid_adb_serial(data.get('serial'))
-  if not serial:
-    return jsonify(ok=False, error='请选择有效的设备'), 400
-  result, status = run_adb('-s', serial, 'shell', 'dumpsys', 'wifi')
-  if status != 200:
-    return jsonify(result), status
-  info = {'ssid': '', 'bssid': '', 'ip': '', 'mac': '', 'frequency': '', 'link_speed': '', 'rssi': ''}
-  output = result.get('output', '')
-  m = re.search(r'Wi-Fi\s+is\s+enabled\n.*?SSID:\s*([^\n]+)', output)
-  if m: info['ssid'] = m.group(1).strip()
-  m = re.search(r'BSSID:\s*([^\n]+)', output)
-  if m: info['bssid'] = m.group(1).strip()
-  m = re.search(r'IP:\s*(\d+\.\d+\.\d+\.\d+)', output)
-  if m: info['ip'] = m.group(1).strip()
-  m = re.search(r'MAC:\s*([0-9a-fA-F:]{17})', output)
-  if m: info['mac'] = m.group(1).strip()
-  m = re.search(r'Frequency:\s*(\d+)\s*MHz', output)
-  if m: info['frequency'] = m.group(1) + ' MHz'
-  m = re.search(r'Link\s+speed:\s*(\d+)\s*Mbps', output)
-  if m: info['link_speed'] = m.group(1) + ' Mbps'
-  m = re.search(r'RSSI:\s*(-?\d+)\s*dBm', output)
-  if m: info['rssi'] = m.group(1) + ' dBm'
-  result['wifi_info'] = info
-  return jsonify(result)
-
-@app.route('/api/adb/config-wifi', methods=['POST'])
-def api_adb_config_wifi():
-  data = request.get_json(silent=True) or {}
-  serial = valid_adb_serial(data.get('serial'))
-  ssid = str(data.get('ssid', '')).strip()
-  password = str(data.get('password', '')).strip()
-  password_type = str(data.get('password_type', 'WPA')).strip().upper()
-  if not serial:
-    return jsonify(ok=False, error='请选择有效的设备'), 400
-  if not ssid:
-    return jsonify(ok=False, error='请输入 WiFi 名称（SSID）'), 400
-  if len(ssid) > 64:
-    return jsonify(ok=False, error='WiFi 名称不能超过 64 个字符'), 400
-  if password_type not in ('WPA', 'WEP', 'OPEN'):
-    return jsonify(ok=False, error='密码类型必须是 WPA、WEP 或 OPEN'), 400
-  temp_path = None
-  try:
-    with tempfile.NamedTemporaryFile(prefix='mpd-wifi-', suffix='.apk', delete=False) as temp_file:
-      temp_path = Path(temp_file.name)
-      import urllib.request
-      apk_url = 'https://github.com/nicoulaj/adb-wifi-join/releases/download/v1.0.1/adb-join-wifi-1.0.1.apk'
-      try:
-        urllib.request.urlretrieve(apk_url, temp_path)
-      except Exception as e:
-        return jsonify(ok=False, error=f'下载配网工具失败: {str(e)}'), 500
-    install_result, install_status = run_adb('-s', serial, 'install', '-r', '-g', str(temp_path))
-    if install_status != 200:
-      return jsonify(install_result), install_status
-    intent_args = [
-      '-s', serial, 'shell', 'am', 'start',
-      '-n', 'com.steinwurf.adbjoinwifi/.MainActivity',
-      '-e', 'ssid', ssid,
-      '-e', 'password_type', password_type,
-    ]
-    if password and password_type != 'OPEN':
-      intent_args.extend(['-e', 'password', password])
-    return adb_json_result(run_adb(*intent_args))
-  except OSError:
-    return jsonify(ok=False, error='无法暂存文件，请检查 iStoreOS 临时空间'), 500
-  finally:
-    if temp_path:
-      temp_path.unlink(missing_ok=True)
 
 def resolve_m3u_entries(text):
   music_dir = get_music_directory().resolve()
