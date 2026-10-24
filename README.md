@@ -1,6 +1,6 @@
 # MPD Studio — 私人音乐播放器 & ADB 控制台
 
-一个运行在 **iStoreOS / OpenWrt** 上的轻量级 Web 音乐播放器，已经在**斐讯 N1**（ARM Cortex-A53）上验证可行。基于 **MPD**（Music Player Daemon），提供唱片风格界面、LRC 歌词显示、歌单管理、USB 声卡配置、HTTP 音频流，以及内置的 **ADB 控制台**用于远程操控 Android 电视。
+一个运行在 **iStoreOS / OpenWrt** 上的轻量级 Web 音乐播放器，已经在**斐讯 N1**（ARM Cortex-A53）上验证可行。基于 **MPD**（Music Player Daemon）和Owntone，提供唱片风格界面、LRC 歌词显示、歌单管理、USB 声卡配置、HTTP 音频流，以及内置的 **ADB 控制台**用于远程操控 Android 电视和安卓智能音箱。
 
 ![MPD Studio 界面预览](首页.png)
 
