@@ -753,7 +753,7 @@ def get_status():
     raw_song = display_music_uri(out[0]) if out else ''
     if get_selected_service() == 'owntone':
         raw_song = fix_owntone_text(raw_song)
-    s = {'song':raw_song, 'state':'paused','pos':'','time':'','progress':0,'volume':0,'repeat':False,'random':False}
+    s = {'song':raw_song, 'state':'paused','pos':'','time':'','progress':0,'volume':0,'repeat':False,'random':False,'audio_format':''}
     if not out: return s
     if len(out)>1:
         l=out[1]
@@ -767,6 +767,25 @@ def get_status():
     s['volume']=int(m.group(1)) if m else 0
     s['repeat']='repeat: on' in status_text
     s['random']='random: on' in status_text
+    am=re.search(r'audio:\s*(\d+):(\d+):(\d+)',status_text)
+    bm=re.search(r'bitrate:\s*(\d+)\s*kbps',status_text)
+    if am:
+        sample_rate=int(am.group(1))
+        bits=int(am.group(2))
+        channels=int(am.group(3))
+        fmt_parts=[]
+        if sample_rate>=1000:
+            fmt_parts.append(f"{sample_rate/1000:.1f}kHz")
+        else:
+            fmt_parts.append(f"{sample_rate}Hz")
+        fmt_parts.append(f"{bits}bit")
+        ch_map={1:'Mono',2:'Stereo',6:'5.1',8:'7.1'}
+        fmt_parts.append(ch_map.get(channels, f"{channels}ch"))
+        if bm:
+            fmt_parts.append(f"{bm.group(1)}kbps")
+        s['audio_format']=' | '.join(fmt_parts)
+    elif bm:
+        s['audio_format']=f"{bm.group(1)}kbps"
     return s
 
 @app.route('/api/status')
@@ -1396,6 +1415,7 @@ button{cursor:pointer}
 @keyframes turn{to{transform:rotate(360deg)}}
 .track-title{max-width:800px;font-size:clamp(22px,3vw,36px);line-height:1.35;font-weight:700;overflow-wrap:anywhere}
 .track-sub{margin-top:8px;color:var(--muted);font-size:15px}
+.track-audio-format{margin-top:4px;color:var(--accent);font-size:11px;letter-spacing:.5px;opacity:.8}
 .track-pos{margin-top:18px;color:#7f8186;font-size:12px;letter-spacing:1px}
 .controls{display:flex;align-items:center;gap:24px;margin-top:28px}
 .icon-btn{width:42px;height:42px;border:0;background:transparent;color:#c1c3c6;font-size:21px;transition:color .18s,transform .18s}
@@ -1600,6 +1620,7 @@ button{cursor:pointer}
     <div class="turntable"><div class="artwork" id="artwork"><div class="art-label" id="artlabel">MPD<br>PLAYER</div><img class="cover-image" id="cover" alt="当前歌曲专辑封面" onload="coverLoaded()" onerror="coverMissing()"></div><div class="tonearm" aria-hidden="true"><span class="tonearm-pivot"></span><span class="tonearm-shaft"></span><span class="tonearm-head"></span></div></div>
     <div class="track-title" id="sn">未播放</div>
     <div class="track-sub" id="sm">--:-- / --:--</div>
+    <div class="track-audio-format" id="audioFormat"></div>
     <div class="track-pos" id="trackpos">MPD MUSIC LIBRARY</div>
     <div class="controls">
       <button class="icon-btn" id="brn" title="随机播放" onclick="cmd('random')">⤨</button>
@@ -2485,6 +2506,7 @@ async function rd(){
   const times=(s.time||'0:00 / 0:00').split(' / ');
   document.getElementById('duration').textContent=times[1]||'0:00';
   document.getElementById('sm').textContent=s.state==='playing'?'正在播放':'MPD 音乐库';
+  document.getElementById('audioFormat').textContent=s.audio_format||'';
   document.getElementById('trackpos').textContent=s.pos?'播放列表 '+s.pos:'MPD MUSIC LIBRARY';
   const playButton=document.getElementById('pb');
   playButton.textContent=s.state==='playing'?'⏸':'▶';
