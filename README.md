@@ -1,6 +1,6 @@
 # MPD Studio — 私人音乐播放器 & ADB 控制台
 
-一个运行在 **iStoreOS / OpenWrt** 上的轻量级 Web 音乐播放器，基于 **MPD**（Music Player Daemon），提供唱片风格界面、LRC 歌词显示、歌单管理、USB 声卡配置、HTTP 音频流，以及内置的 **ADB 控制台**用于远程操控 Android 电视。
+一个运行在 **iStoreOS / OpenWrt** 上的轻量级 Web 音乐播放器，已经在**斐讯 N1**（ARM Cortex-A53）上验证可行。基于 **MPD**（Music Player Daemon），提供唱片风格界面、LRC 歌词显示、歌单管理、USB 声卡配置、HTTP 音频流，以及内置的 **ADB 控制台**用于远程操控 Android 电视。
 
 ---
 
@@ -23,11 +23,12 @@
 
 | 软件 | 版本 / 说明 |
 |------|------------|
-| **iStoreOS / OpenWrt** | ARM 架构（如 NanoPi R1、R2S 等） |
+| **iStoreOS / OpenWrt** | ARM 架构，已在**斐讯 N1**上验证 |
 | **Python 3** | 3.8+ 推荐 |
 | **Flask** | `pip install flask`（Python Web 框架） |
 | **mpc** | MPD 命令行客户端（`apk add mpc`） |
 | **MPD** | Music Player Daemon，需编译 `httpd` 和 `lame` 支持 |
+| **ALSA** | 音频驱动框架（`alsa-lib`、`alsa-utils`） |
 | **adb**（可选） | Android Debug Bridge，用于 ADB 控制台功能 |
 
 ---
@@ -53,6 +54,9 @@
 ```sh
 # 更新软件源
 apk update
+
+# 安装 ALSA 音频驱动（USB 声卡依赖）
+apk add alsa-lib alsa-utils
 
 # 安装 MPD 及客户端工具
 apk add mpd mpc
