@@ -75,7 +75,32 @@ mpd --version
 
 输出中应包含 `httpd` 输出插件和 `lame` 编码器。如果缺少，需安装对应的 MPD 插件包。
 
-### 3. 部署 MPD 配置
+### 3. 安装 OwnTone（可选）
+
+OwnTone（原名 forked-daapd）是另一款音乐服务器，支持 AirPlay 和 MPD 协议，可与 MPD 共存。
+
+```sh
+# 安装 OwnTone
+apk add owntone
+
+# 编辑配置文件 /etc/owntone.conf，关键配置项：
+#   general.uid = "owntone"
+#   library.directories = { "/你的音乐目录" }
+#   mpd.port = 6600                         # MPD 兼容端口（不能与 MPD 的 6601 冲突）
+#   websocket_port = 3688
+#   allow_modifying_stored_playlists = true  # 必须开启，否则网页端无法保存歌单
+```
+
+确保 OwnTone 与 MPD 使用**相同的歌单目录**（在 `owntone.conf` 中配置），这样两种服务模式下的歌单才能互通。
+
+```sh
+/etc/init.d/owntone enable
+/etc/init.d/owntone start
+```
+
+> **提示**：如果不需要 OwnTone，跳过此步骤。网页顶部仍可选择 MPD 模式正常工作。
+
+### 4. 部署 MPD 配置
 
 将仓库中的 `mpd.conf` 复制到 `/etc/mpd.conf`，根据实际环境修改以下路径：
 
@@ -88,7 +113,7 @@ cp mpd.conf /etc/mpd.conf
 /etc/init.d/mpd restart
 ```
 
-### 4. 部署 Web 程序
+### 5. 部署 Web 程序
 
 将以下三个文件复制到 iStoreOS 的同一目录（如 `/root/mpd/`）：
 
@@ -97,7 +122,7 @@ mkdir -p /root/mpd
 # 将 mpd_web.py、login.html、adb.html 上传到 /root/mpd/
 ```
 
-### 5. 配置登录凭据
+### 6. 配置登录凭据
 
 生成随机 session 密钥：
 
@@ -165,7 +190,7 @@ chmod +x /etc/init.d/mpd-web
 /etc/init.d/mpd-web start
 ```
 
-### 7. 访问
+### 8. 访问
 
 在浏览器中打开：
 
@@ -285,6 +310,29 @@ audio_output {
 流地址：`http://iStoreOS地址:8000/`
 
 网页播放器会自动连接此流并在浏览器中播放。HTTP 流默认对歌词和进度有约 6 秒缓冲补偿，可通过歌词栏的 ±0.5s 按钮微调。
+
+---
+
+## MPD 与 OwnTone 歌单的区别
+
+网页顶部可切换 MPD 或 OwnTone 模式，两种模式下的歌单**底层共享同一目录**，但操作机制不同：
+
+| 操作 | MPD 模式 | OwnTone 模式 |
+|------|---------|-------------|
+| **查看歌单列表** | `mpc lsplaylists` 直接读取 `.m3u` 文件 | 通过 OwnTone JSON API `GET /api/library/playlists` 获取 |
+| **保存当前队列** | `mpc save <名称>` 写入 `.m3u` 文件 | 同样调用 `mpc save`（MPD 协议），需 OwnTone 开启 `allow_modifying_stored_playlists` |
+| **载入歌单播放** | `mpc clear` → `mpc load <名称>` → `mpc play`，逐首加入队列 | 通过 API `POST /api/queue/items/add`，一次性传入 `uris` + `playback: start` |
+| **播放歌单中指定歌曲** | 先加载整张歌单，再根据 URI 出现次数定位并 `mpc play <序号>` | 使用 API 参数 `playback_from_position` 直接跳转 |
+| **删除歌单** | `mpc rm <名称>` 删除 `.m3u` 文件 | 通过 API `DELETE /api/library/playlists/{id}` |
+| **添加单曲到歌单** | `mpc addplaylist <歌单名> <URI>` | **没有对应的 API**，程序直接编辑底层 `.m3u` 文件，追加 `/music/` 前缀的曲目路径 |
+| **导入 M3U 歌单** | 从浏览器上传 `.m3u` 文件，写入 MPD 歌单目录 | 同样写入 MPD 歌单目录（不经过 OwnTone API），重复导入后需刷新才能在 OwnTone 歌单列表看到 |
+
+### 关键注意事项
+
+1. **两个服务的歌单目录必须相同**。OwnTone 模式下添加/删除曲目最终还是操作 `.m3u` 文件，路径不一致会导致操作失败。
+2. **OwnTone 模式不支持从网页导入 M3U 后自动刷新**。导入的歌单文件会在下一次 `GET /api/library/playlists`（切换标签或刷新页面）时被 OwnTone 识别。
+3. **保存队列功能在 OwnTone 模式下的前提**：`owntone.conf` 中必须设置 `allow_modifying_stored_playlists = true`。
+4. **添加单曲到 OwnTone 歌单**时，程序直接修改底层 M3U 文件，不会触发 OwnTone 的数据库更新。已播放过的歌单可能不受影响，但新建歌单建议在 MPD 模式下管理。
 
 ---
 
