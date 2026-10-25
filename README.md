@@ -18,6 +18,7 @@
 - **登录认证** — 通过环境变量配置用户名密码，保护控制台不被未授权访问
 - **背景图自定义** — 上传本地图片作为页面背景
 - **ADB 控制台** — 连接 Android 电视、截图预览、安装 APK、发送遥控按键、启动应用、自定义 ADB 指令
+- **视频播放器** — 浏览和播放视频文件，支持浏览器原生格式直播，非原生格式通过 FFmpeg 实时转码为 MP4 流
 
 ---
 
@@ -31,6 +32,7 @@
 | **mpc** | MPD 命令行客户端（`apk add mpc`） |
 | **MPD** | Music Player Daemon，需编译 `httpd` 和 `lame` 支持 |
 | **ALSA** | 音频驱动框架（`alsa-lib`、`alsa-utils`） |
+| **FFmpeg**（可选） | 视频转码引擎，非 MP4/WebM 格式需 FFmpeg 实时转码 |
 | **adb**（可选） | Android Debug Bridge，用于 ADB 控制台功能 |
 
 ---
@@ -42,6 +44,7 @@
 | `mpd_web.py` | Flask 主程序，包含全部后端 API 和前端界面 |
 | `login.html` | 登录页面模板（与主程序放在同一目录） |
 | `adb.html` | ADB 控制台页面模板（与主程序放在同一目录） |
+| `video.html` | 视频播放器页面模板（与主程序放在同一目录） |
 | `mpd.conf` | MPD 配置文件示例（部署到 `/etc/mpd.conf`） |
 | `mpd-web_env.txt` | 环境变量配置示例 |
 
@@ -65,6 +68,9 @@ apk add mpd mpc
 
 # 安装 ADB（可选）
 apk add adb
+
+# 安装 FFmpeg（可选，视频转码需要）
+apk add ffmpeg
 
 # 安装 Python 和 Flask
 apk add python3 py3-pip
@@ -138,11 +144,11 @@ cp mpd.conf /etc/mpd.conf
 
 ### 5. 部署 Web 程序
 
-将以下三个文件复制到 iStoreOS 的同一目录（如 `/root/mpd/`）：
+将以下文件复制到 iStoreOS 的同一目录（如 `/root/mpd/`）：
 
 ```sh
 mkdir -p /root/mpd
-# 将 mpd_web.py、login.html、adb.html 上传到 /root/mpd/
+# 将 mpd_web.py、login.html、adb.html、video.html 上传到 /root/mpd/
 ```
 
 ### 6. 配置登录凭据
@@ -241,6 +247,7 @@ http://iStoreOS地址:8800/adb
 | `OWNTONE_HOST` | 否 | `127.0.0.1` | OwnTone 服务地址 |
 | `OWNTONE_PORT` | 否 | `6600` | OwnTone MPD 兼容端口 |
 | `OWNTONE_API_PORT` | 否 | `3689` | OwnTone JSON API 端口 |
+| `VIDEO_DIR` | 否 | `/mnt/usb1_2-1/Video` | 视频文件存放目录 |
 
 ---
 
@@ -279,6 +286,15 @@ http://iStoreOS地址:8800/adb
 | `/api/background` | POST | 上传背景图（最大 8MB） |
 | `/api/background` | DELETE | 删除背景图 |
 | `/logout` | POST | 退出登录 |
+
+### 视频 API
+
+| 路由 | 方法 | 用途 |
+|------|------|------|
+| `/video` | GET | 视频播放器页面 |
+| `/api/video/list?path=<路径>` | GET | 获取视频目录文件列表 |
+| `/api/video/play?path=<路径>` | GET | 播放视频（MP4/WebM/M4V 直出，其他格式 FFmpeg 转码） |
+| `/api/video/download?path=<路径>` | GET | 下载视频文件 |
 
 ---
 
@@ -333,6 +349,53 @@ audio_output {
 流地址：`http://iStoreOS地址:8000/`
 
 网页播放器会自动连接此流并在浏览器中播放。HTTP 流默认对歌词和进度有约 6 秒缓冲补偿，可通过歌词栏的 ±0.5s 按钮微调。
+
+---
+
+## 视频播放器
+
+视频播放器页面 (`/video`) 提供类似文件管理器的视频浏览和播放功能：
+
+- **目录浏览** — 左侧视频列表支持目录导航，显示文件名、大小、修改时间
+- **浏览器原生播放** — MP4、WebM、M4V 格式直接输出给浏览器，无需转码
+- **FFmpeg 实时转码** — 其他格式（MKV、AVI、MOV、FLV、WMV、TS、MTS）通过 FFmpeg 实时转码为 MP4 流
+- **全屏播放** — 支持全屏模式和自定义控件（播放/暂停、进度条、音量）
+- **视频下载** — 点击下载按钮直接下载原始文件
+
+### FFmpeg 转码说明
+
+对于浏览器不原生支持的视频格式，后端调用 FFmpeg 实时转码：
+
+```sh
+ffmpeg -i <输入文件> \
+  -c:v libx264 -preset ultrafast -tune zerolatency \
+  -c:a aac -b:a 128k \
+  -movflags frag_keyframe+empty_moov \
+  -f mp4 pipe:1
+```
+
+- 使用 `ultrafast` 预设和 `zerolatency` 调优，优先保证低延迟
+- 音频编码为 AAC 128kbps
+- 输出为流式 MP4（fragmented MP4），适合边转边播
+
+### 视频目录配置
+
+通过环境变量 `VIDEO_DIR` 指定视频文件存放目录，默认值为 `/mnt/usb1_2-1/Video`。程序仅允许访问该目录及其子目录下的文件，确保安全性。
+
+支持的视频格式：
+
+| 格式 | 播放方式 |
+|------|---------|
+| `.mp4` | 浏览器原生播放 |
+| `.webm` | 浏览器原生播放 |
+| `.m4v` | 浏览器原生播放 |
+| `.mkv` | FFmpeg 转码为 MP4 |
+| `.avi` | FFmpeg 转码为 MP4 |
+| `.mov` | FFmpeg 转码为 MP4 |
+| `.flv` | FFmpeg 转码为 MP4 |
+| `.wmv` | FFmpeg 转码为 MP4 |
+| `.ts` | FFmpeg 转码为 MP4 |
+| `.mts` | FFmpeg 转码为 MP4 |
 
 ---
 
@@ -397,6 +460,12 @@ audio_output {
 
 **Q: HTTP 流没有声音**
 > 检查 MPD 是否编译了 `httpd` 和 `lame` 支持（`mpd --version`），确认 `mpd.conf` 中 `httpd` 输出的 `enabled` 为 `yes`。
+
+**Q: 视频无法播放（MKV/AVI 等格式转圈）**
+> 需要安装 FFmpeg（`apk add ffmpeg`），并确认 `ffmpeg` 命令在系统 PATH 中可用。MP4/WebM/M4V 格式不依赖 FFmpeg，可直接播放。
+
+**Q: 视频列表为空**
+> 检查环境变量 `VIDEO_DIR` 指向的目录是否存在且包含视频文件，默认路径为 `/mnt/usb1_2-1/Video`。
 
 **Q: 封面不显示**
 > 程序按以下优先级查找封面：MPD `readpicture`/`albumart` → 同目录 `cover.jpg`/`folder.jpg` 等 → 音频文件内嵌 ID3 图片。
