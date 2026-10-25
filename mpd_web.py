@@ -5,7 +5,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlencode, urlsplit
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
-from flask import Flask, render_template_string, jsonify, request, send_file, session, redirect, url_for, has_request_context
+from flask import Flask, render_template_string, jsonify, request, send_file, session, redirect, url_for, has_request_context, Response
 
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 app = Flask(__name__)
@@ -33,6 +33,7 @@ def require_login():
 BACKGROUND_DIR = Path(__file__).resolve().parent / 'background'
 ADB_PAGE_FILE = Path(__file__).resolve().parent / 'adb.html'
 LOGIN_PAGE_FILE = Path(__file__).resolve().parent / 'login.html'
+VIDEO_PAGE_FILE = Path(__file__).resolve().parent / 'video.html'
 BACKGROUND_MAX_SIZE = 8 * 1024 * 1024
 PLAYLIST_MAX_SIZE = 4 * 1024 * 1024
 ADB_APK_MAX_SIZE = 256 * 1024 * 1024
@@ -336,6 +337,10 @@ def adb_json_result(result):
 @app.route('/adb')
 def adb_page():
   return send_file(ADB_PAGE_FILE)
+
+@app.route('/video')
+def video_page():
+  return send_file(VIDEO_PAGE_FILE)
 
 @app.route('/api/adb/devices')
 def api_adb_devices():
@@ -1707,6 +1712,7 @@ button{cursor:pointer}
     <div class="top-actions" id="topActions">
       <select class="service-select" id="serviceSelect" aria-label="选择音乐服务" onchange="changeService(this.value)"><option value="mpd">MPD</option><option value="owntone">OwnTone</option></select>
       <button class="modal-open-btn" onclick="openBgPicker()">🖼 背景</button>
+      <a class="modal-open-btn" href="/video" target="_blank" rel="noopener" style="text-decoration:none">🎬 视频</a>
       <a class="modal-open-btn" href="/adb" target="_blank" rel="noopener" style="text-decoration:none">ADB 控制</a>
       <button class="modal-open-btn" onclick="logout()">退出</button>
       <button class="modal-open-btn" id="btnOpenLibrary" onclick="toggleLibrary()">📚 媒体库</button>
@@ -2605,7 +2611,7 @@ function sw(t){
   if (plbox) plbox.classList.toggle('hide', t!=='pl');
   const queuepane = document.getElementById('queuepane');
   if (queuepane) queuepane.classList.toggle('hide', t!=='queue');
-  
+
   if(t==='pl') {
     loadpl();
   } else if(t==='queue') {
@@ -2614,6 +2620,7 @@ function sw(t){
     // 曲库数量在初始化时处理
   }
 }
+
 async function rd(){
   const r=await fetch('/api/status');const d=await r.json();const s=d.status;
   currentPlayingUri=s.uri||'';
@@ -2764,6 +2771,83 @@ def logout():
   return jsonify(ok=True)
 @app.route('/')
 def index(): return render_template_string(PAGE)
+
+# ---------------- 视频播放功能 ----------------
+VIDEO_DIR = os.environ.get('VIDEO_DIR', '/mnt/usb1_2-1/Video')
+VIDEO_EXTENSIONS = {'.mp4', '.webm', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.m4v', '.ts', '.mts'}
+
+@app.route('/api/video/list')
+def api_video_list():
+    path = request.args.get('path', '/')
+    try:
+        full_path = (Path(VIDEO_DIR) / path.lstrip('/')).resolve()
+        if not str(full_path).startswith(str(Path(VIDEO_DIR).resolve())):
+            return jsonify(ok=False, error='路径无效'), 403
+        if not full_path.exists():
+            return jsonify(ok=False, error='目录不存在'), 404
+        items = []
+        for item in sorted(full_path.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+            rel_path = '/' + item.relative_to(Path(VIDEO_DIR)).as_posix()
+            items.append({
+                'name': item.name,
+                'path': rel_path,
+                'is_dir': item.is_dir(),
+                'size': item.stat().st_size if item.is_file() else 0,
+                'mtime': item.stat().st_mtime,
+                'ext': item.suffix.lower()
+            })
+        return jsonify(ok=True, items=items, current_path=path)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 500
+
+@app.route('/api/video/play')
+def api_video_play():
+    path = request.args.get('path', '')
+    try:
+        full_path = (Path(VIDEO_DIR) / path.lstrip('/')).resolve()
+        if not str(full_path).startswith(str(Path(VIDEO_DIR).resolve())):
+            return jsonify(ok=False, error='路径无效'), 403
+        if not full_path.is_file():
+            return jsonify(ok=False, error='文件不存在'), 404
+        ext = full_path.suffix.lower()
+        if ext in ('.mp4', '.webm', '.m4v'):
+            return send_file(full_path, mimetype=f'video/{ext[1:]}')
+        elif ext in VIDEO_EXTENSIONS:
+            def generate():
+                cmd = [
+                    'ffmpeg', '-i', str(full_path),
+                    '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
+                    '-c:a', 'aac', '-b:a', '128k',
+                    '-movflags', 'frag_keyframe+empty_moov',
+                    '-f', 'mp4', 'pipe:1'
+                ]
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                try:
+                    while True:
+                        chunk = proc.stdout.read(8192)
+                        if not chunk:
+                            break
+                        yield chunk
+                finally:
+                    proc.terminate()
+            return Response(generate(), mimetype='video/mp4')
+        else:
+            return jsonify(ok=False, error='不支持的视频格式'), 400
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 500
+
+@app.route('/api/video/download')
+def api_video_download():
+    path = request.args.get('path', '')
+    try:
+        full_path = (Path(VIDEO_DIR) / path.lstrip('/')).resolve()
+        if not str(full_path).startswith(str(Path(VIDEO_DIR).resolve())):
+            return jsonify(ok=False, error='路径无效'), 403
+        if not full_path.is_file():
+            return jsonify(ok=False, error='文件不存在'), 404
+        return send_file(full_path, as_attachment=True, download_name=full_path.name)
+    except Exception as e:
+        return jsonify(ok=False, error=str(e)), 500
 
 if __name__=='__main__':
     threading.Thread(target=mpd_watchdog, name='mpd-watchdog', daemon=True).start()
