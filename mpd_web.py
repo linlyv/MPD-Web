@@ -134,18 +134,33 @@ def owntone_api(method, path, params=None):
   host = SERVICE_CONNECTIONS['owntone']['host']
   if ':' in host and not host.startswith('['):
     host = f'[{host}]'
-  query = urlencode(params or {})
   url = f'http://{host}:{OWNTONE_API_PORT}{path}'
-  if query:
-    url += '?' + query
+  if params:
+    flat = []
+    for k, v in params.items():
+      if isinstance(v, list):
+        flat.append((k, ','.join(str(item) for item in v)))
+      elif isinstance(v, bool):
+        flat.append((k, 'true' if v else 'false'))
+      else:
+        flat.append((k, str(v)))
+    query = urlencode(flat)
+    if query:
+      url += '?' + query
+  print(f'[API] {method} {url}', flush=True)
   try:
-    with urlopen(Request(url, method=method), timeout=10) as response:
+    req = Request(url, method=method)
+    with urlopen(req, timeout=10) as response:
       payload = response.read()
-    return json.loads(payload) if payload else {}
+    result = json.loads(payload) if payload else {}
+    print(f'[API] → status={response.status} body={json.dumps(result, ensure_ascii=False)[:500]}', flush=True)
+    return result
   except HTTPError as error:
     detail = error.read().decode('utf-8', 'replace').strip()
+    print(f'[API] ERROR HTTP {error.code}: {detail}', flush=True)
     raise RuntimeError(detail or f'OwnTone API 返回 HTTP {error.code}') from error
   except (URLError, TimeoutError, OSError) as error:
+    print(f'[API] ERROR 连接失败: {error}', flush=True)
     raise RuntimeError(f'无法连接 OwnTone JSON API（{OWNTONE_API_PORT}）：{error}') from error
 
 def get_owntone_playlists():
@@ -162,6 +177,25 @@ def get_owntone_playlist(identifier):
      if str(playlist.get('id')) == playlist_id),
     None,
   )
+
+def normalize_track_uri(uri):
+  uri = uri.replace('\\', '/').strip()
+  if uri.startswith('file:'):
+    uri = uri[5:]
+  while uri.startswith('/music/'):
+    uri = uri[len('/music/'):]
+  return uri
+
+def ensure_owntone_uri(uri):
+  if not uri:
+    return ''
+  uri = uri.strip()
+  if uri.startswith('library:') or uri.startswith('file:') or uri.startswith('/music/') or uri.startswith('/'):
+    return uri
+  normalized = normalize_track_uri(uri)
+  if not normalized or normalized.startswith('.'):
+    return ''
+  return '/music/' + normalized
 
 def owntone_playlist_tracks(playlist):
   result = owntone_api(
@@ -1240,21 +1274,28 @@ def api_pl_load():
     if get_selected_service() == 'owntone':
       try:
         playlist = get_owntone_playlist(name)
+        print(f'[API] api_pl_load: name={name} playlist={playlist}', flush=True)
         if not playlist:
           return jsonify(ok=False, error='OwnTone 歌单不存在，请刷新列表'), 404
+        player = owntone_api('GET', '/api/player')
+        was_shuffle = player.get('shuffle', False)
+        print(f'[API] api_pl_load: was_shuffle={was_shuffle}', flush=True)
         result = owntone_api('POST', '/api/queue/items/add', {
-          'uris': playlist['uri'], 'clear': 'true', 'playback': 'start',
+          'uris': [playlist['uri']], 'clear': True, 'playback': 'start', 'shuffle': False,
         })
+        if was_shuffle:
+          owntone_api('PUT', '/api/player/shuffle', {'state': True})
+          print(f'[API] api_pl_load: shuffle restored to true', flush=True)
       except RuntimeError as error:
         return jsonify(ok=False, error=str(error)), 502
       return jsonify(ok=True, count=result.get('count', 0))
-    expected_tracks = [line for line in mpc('-f', '%file%', 'playlist', name).splitlines() if line.strip()]
+    expected_tracks = [normalize_track_uri(line) for line in mpc('-f', '%file%', 'playlist', name).splitlines() if line.strip()]
     if not expected_tracks:
       return jsonify(ok=False, error='歌单为空或 MPD 无法读取该歌单'), 404
-    for args in (('clear',), ('load', name), ('play',)):
-      ok, output = run_mpc_checked(*args)
-      if not ok:
-        return jsonify(ok=False, error=output or 'MPD 加载歌单失败'), 502
+    run_mpc_checked('clear')
+    for track in expected_tracks:
+      mpc('add', track)
+    run_mpc_checked('play')
     loaded_tracks = get_playlist()
     if len(loaded_tracks) != len(expected_tracks):
       loaded_counts = {}
@@ -1306,16 +1347,15 @@ def api_pl_addtr():
     uri = str(data.get('uri', '')).replace('\\', '/').strip()
     if not name or not uri:
       return jsonify(ok=False, error='请选择歌单和歌曲'), 400
+    if name in ('.', '..') or '/' in name or '\\' in name or any(ord(char) < 32 for char in name):
+      return jsonify(ok=False, error='歌单名称无效'), 400
     if get_selected_service() == 'owntone':
-      if uri.startswith('/music/'):
-        uri = uri[len('/music/'):]
-      if uri.startswith('/') or '..' in Path(uri).parts:
+      uri = normalize_track_uri(uri)
+      if not uri or uri.startswith('/') or '..' in Path(uri).parts:
         return jsonify(ok=False, error='歌曲路径无效'), 400
       try:
         playlist = get_owntone_playlist(name)
-        if not playlist:
-          return jsonify(ok=False, error='OwnTone 歌单不存在，请刷新列表'), 404
-        playlist_name = str(playlist.get('name', '')).strip()
+        playlist_name = str(playlist.get('name', '')).strip() if playlist else name
         if not playlist_name or '/' in playlist_name or '\\' in playlist_name or any(ord(char) < 32 for char in playlist_name):
           return jsonify(ok=False, error='OwnTone 歌单名称无效'), 400
         playlist_dir = get_playlist_directory().resolve()
@@ -1325,19 +1365,20 @@ def api_pl_addtr():
         target = (playlist_dir / playlist_filename).resolve()
         if target.parent != playlist_dir:
           return jsonify(ok=False, error='OwnTone 歌单路径无效'), 400
-        if not target.is_file():
-          return jsonify(
-            ok=False,
-            error=f'找不到歌单文件「{playlist_filename}」，请确认 OwnTone 与 MPD 使用相同的歌单目录',
-          ), 404
-        text = target.read_text(encoding='utf-8-sig')
+        is_new = not target.is_file()
         track_path = f'/music/{uri}'
-        existing_tracks = {
-          music_relative_path(line.strip()).as_posix()
-          for line in text.splitlines()
-          if line.strip() and not line.lstrip().startswith('#')
-        }
-        if music_relative_path(track_path).as_posix() not in existing_tracks:
+        if is_new:
+          with target.open('w', encoding='utf-8', newline='\n') as playlist_file:
+            playlist_file.write(track_path + '\n')
+        else:
+          text = target.read_text(encoding='utf-8-sig')
+          existing_tracks = {
+            music_relative_path(line.strip()).as_posix()
+            for line in text.splitlines()
+            if line.strip() and not line.lstrip().startswith('#')
+          }
+          if music_relative_path(track_path).as_posix() in existing_tracks:
+            return jsonify(ok=True)
           with target.open('a', encoding='utf-8', newline='\n') as playlist_file:
             if text and not text.endswith(('\n', '\r')):
               playlist_file.write('\n')
@@ -1346,7 +1387,7 @@ def api_pl_addtr():
         return jsonify(ok=False, error=f'更新 OwnTone 歌单文件失败：{error}'), 502
       except RuntimeError as error:
         return jsonify(ok=False, error=str(error)), 502
-      return jsonify(ok=True)
+      return jsonify(ok=True, created=is_new)
     ok, output = run_mpc_checked('addplaylist', name, uri)
     if not ok:
       return jsonify(ok=False, error=output or '添加歌曲到歌单失败'), 502
@@ -1359,19 +1400,23 @@ def api_pl_tracks(name):
         playlist = get_owntone_playlist(name)
         if not playlist:
           return jsonify(ok=False, error='OwnTone 歌单不存在，请刷新列表'), 404
-        items = owntone_playlist_tracks(playlist)
-      except RuntimeError as error:
+        tracks = owntone_playlist_tracks(playlist)
+        track_list = []
+        for item in tracks:
+          title = item.get('title', '')
+          uri = item.get('uri', '') or ''
+          if title:
+            track_list.append(title)
+          elif uri:
+            normalized = normalize_track_uri(uri)
+            track_list.append(normalized.rsplit('/', 1)[-1] if '/' in normalized else normalized)
+          else:
+            track_list.append('(未知歌曲)')
+        return jsonify(tracks=track_list)
+      except Exception as error:
         return jsonify(ok=False, error=str(error)), 502
-      tracks = [
-        ' - '.join(part for part in (fix_owntone_text(item.get('artist')), fix_owntone_text(item.get('title'))) if part)
-        or display_music_uri(item.get('path', item.get('uri', '')))
-        for item in items
-      ]
-      return jsonify(tracks=tracks)
-    out = mpc('playlist', name)
-    tracks = [l for l in out.splitlines() if l.strip()]
+    tracks = [normalize_track_uri(line) for line in mpc('-f', '%file%', 'playlist', name).splitlines() if line.strip()]
     return jsonify(tracks=tracks)
-
 @app.route('/api/playlists/removetrack', methods=['POST'])
 def api_pl_removetr():
     d = request.get_json(force=True)
@@ -1389,37 +1434,46 @@ def api_pl_playtrack():
     return jsonify(ok=False, error='pos must be a non-negative integer'), 400
   if not name or position < 0:
     return jsonify(ok=False, error='name and a non-negative pos are required'), 400
+
   if get_selected_service() == 'owntone':
     try:
       playlist = get_owntone_playlist(name)
+      print(f'[API] api_pl_playtrack: name={name} pos={position}', flush=True)
       if not playlist:
         return jsonify(ok=False, error='OwnTone 歌单不存在，请刷新列表'), 404
       tracks = owntone_playlist_tracks(playlist)
       if position >= len(tracks):
         return jsonify(ok=False, error='歌曲序号超出歌单范围，请重新展开歌单后再试'), 404
-      owntone_api('POST', '/api/queue/items/add', {
-        'uris': playlist['uri'], 'clear': 'true', 'playback': 'start',
-        'playback_from_position': position,
+
+      uris = [t.get('uri') or '' for t in tracks]
+      if not any(uris):
+        return jsonify(ok=False, error='歌单中没有有效的歌曲'), 500
+      if not uris[position]:
+        return jsonify(ok=False, error=f'目标歌曲（第{position+1}首）没有有效的 URI，无法播放'), 400
+
+      valid_uris = [u for u in uris if u]
+      valid_position = sum(1 for i in range(position) if uris[i])
+      player = owntone_api('GET', '/api/player')
+      was_shuffle = player.get('shuffle', False)
+      result = owntone_api('POST', '/api/queue/items/add', {
+        'uris': valid_uris, 'clear': True, 'playback': 'start',
+        'playback_from_position': str(valid_position), 'shuffle': False,
       })
+      if was_shuffle:
+        owntone_api('PUT', '/api/player/shuffle', {'state': True})
+        print(f'[API] api_pl_playtrack: shuffle restored to true', flush=True)
+      return jsonify(ok=True, count=result.get('count', len(uris)))
     except RuntimeError as error:
       return jsonify(ok=False, error=str(error)), 502
-    return jsonify(ok=True)
-  tracks = [line for line in mpc('-f', '%file%', 'playlist', name).splitlines() if line.strip()]
+
+  tracks = [normalize_track_uri(line) for line in mpc('-f', '%file%', 'playlist', name).splitlines() if line.strip()]
   if position >= len(tracks):
     return jsonify(ok=False, error='歌曲序号超出歌单范围，请重新展开歌单后再试'), 404
-  target_uri = tracks[position]
-  occurrence = tracks[:position + 1].count(target_uri) - 1
-  for args in (('clear',), ('load', name)):
-    ok, output = run_mpc_checked(*args)
-    if not ok:
-      return jsonify(ok=False, error=output or 'MPD 播放歌单歌曲失败'), 502
-  loaded_tracks = get_playlist()
-  matching_positions = [index for index, uri in enumerate(loaded_tracks) if uri == target_uri]
-  if occurrence >= len(matching_positions):
-    return jsonify(ok=False, error='所选歌曲没有加入播放队列，请检查 MPD 歌单路径和曲库文件'), 502
-  ok, output = run_mpc_checked('play', str(matching_positions[occurrence] + 1))
-  if not ok:
-    return jsonify(ok=False, error=output or 'MPD 播放歌单歌曲失败'), 502
+
+  run_mpc_checked('clear')
+  for track in tracks:
+    mpc('add', track)
+  run_mpc_checked('play', str(position + 1))
   return jsonify(ok=True)
 
 PAGE = """<!DOCTYPE html><html lang="zh"><head><meta charset="UTF-8">
@@ -2185,9 +2239,11 @@ async function configureAudio(){
 function ap(u){
   fetch('/api/playlists').then(r=>r.json()).then(d=>{
     const playlists=d.playlist_items||d.playlists.map(name=>({id:name,name}));
-    if(!playlists.length){alert('先创建歌单');return}
     var ov=document.getElementById('ovl');
     ov.innerHTML='<div class="ovl-box"><h3>加到哪个歌单？</h3><div class="ovl-items"></div>'+
+      '<div style="padding:8px 12px;border-top:1px solid #444;display:flex;gap:8px;">'+
+      '<input type="text" id="newPlName" placeholder="新建歌单名称..." style="flex:1;padding:6px 10px;background:#2a2a2a;border:1px solid #555;color:#eee;border-radius:4px;font-size:13px;">'+
+      '<button id="createPlBtn" style="padding:6px 16px;background:#c44;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px;">新建</button></div>'+
       '<button class="ovl-cancel" id="ovc">取消</button></div>';
     const items=ov.querySelector('.ovl-items');
     playlists.forEach(playlist=>{
@@ -2198,20 +2254,33 @@ function ap(u){
       item.textContent=playlist.name;
       items.appendChild(item);
     });
+    const newPlInput=document.getElementById('newPlName');
+    const createBtn=document.getElementById('createPlBtn');
+    function doAdd(n,label){
+      fetch('/api/playlists/addtrack',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n,uri:u})})
+        .then(async response=>{
+          const result=await response.json();
+          if(!response.ok){alert(result.error||'添加歌曲到歌单失败');return}
+          ov.style.display='none';
+          if(result.created){alert('已创建歌单「'+label+'」并加入歌曲')}
+          else{alert('已加到「'+label+'」')}
+        })
+        .catch(()=>alert('添加歌曲到歌单失败，请检查音乐服务连接'));
+    }
+    createBtn.onclick=function(){
+      const n=newPlInput.value.trim();
+      if(!n){alert('请输入歌单名称');return}
+      var bs=String.fromCharCode(92);
+      if(n.indexOf('/')>=0||n.indexOf(bs)>=0){alert('歌单名称不能包含 '+bs+' 或 /');return}
+      doAdd(n,n);
+    };
+    newPlInput.onkeydown=function(e){if(e.key==='Enter')createBtn.click()};
     ov.style.display='flex';
     ov.onclick=function(e){
       if(e.target.id==='ovc'||e.target===ov){ov.style.display='none';return}
       var item=e.target.closest('.ovl-item');
       if(item){
-        var n=item.dataset.name;
-        fetch('/api/playlists/addtrack',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n,uri:u})})
-          .then(async response=>{
-            const result=await response.json();
-            if(!response.ok){alert(result.error||'添加歌曲到歌单失败');return}
-            ov.style.display='none';
-            alert('已加到「'+item.dataset.label+'」');
-          })
-          .catch(()=>alert('添加歌曲到歌单失败，请检查音乐服务连接'));
+        doAdd(item.dataset.name,item.dataset.label);
       }
     };
   });
@@ -2489,7 +2558,9 @@ async function ll(n){
     const response=await fetch('/api/playlists/load',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})});
     const result=await response.json();
     if(!response.ok){alert(result.error||'加载歌单失败');return}
+    streamAutoplayAttempted=false;
     await rd();
+    if(httpOutputEnabled){resetStreamSource();startStreamPlayback()}
   }catch(error){
     alert('加载歌单失败，请检查 MPD 连接');
   }
@@ -2499,7 +2570,9 @@ async function pt(n,pos){
     const response=await fetch('/api/playlists/playtrack',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n,pos})});
     const result=await response.json();
     if(!response.ok){alert(result.error||'播放歌单歌曲失败');return}
+    streamAutoplayAttempted=false;
     await rd();
+    if(httpOutputEnabled){resetStreamSource();startStreamPlayback()}
   }catch(error){
     alert('播放歌单歌曲失败，请检查 MPD 连接');
   }
@@ -2570,10 +2643,12 @@ async function rd(){
   document.getElementById('br').classList.toggle('active',s.repeat);
   document.getElementById('brn').classList.toggle('active',s.random);
   
+  const wasRunning=playbackRunning;
   playbackTimeSeconds=parseTimecode(times[0]||'0:00');
   playbackDurationSeconds=parseTimecode(times[1]||'0:00');
   playbackUpdatedAt=performance.now();
   playbackRunning=s.state==='playing';
+  if(wasRunning&&!playbackRunning){streamAutoplayAttempted=false}
   updatePlaybackProgress();
   const streamAudio=document.getElementById('streamAudio');
   const needsStreamGesture=playbackRunning&&httpOutputEnabled&&(streamAudio.paused||streamAudio.error);
@@ -2687,7 +2762,6 @@ def login():
 def logout():
   session.clear()
   return jsonify(ok=True)
-
 @app.route('/')
 def index(): return render_template_string(PAGE)
 
