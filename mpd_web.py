@@ -1736,7 +1736,7 @@ button{cursor:pointer}
     </div>
     <div class="seekrow"><span id="elapsed">0:00</span><div class="pb" id="progress" role="slider" tabindex="0" aria-label="播放进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" onclick="seekTo(event)" onkeydown="seekByKey(event)"><div class="pf" id="pf"></div></div><span id="duration">0:00</span></div>
     <div class="stream-control"><span id="streamNotice">网页音频状态检测中</span><button id="streamReconnect" type="button" onclick="connectStream()">连接 / 重连声音</button></div>
-    <audio id="streamAudio" preload="none"></audio>
+    <audio id="streamAudio" preload="auto"></audio>
   </section>
 
   <!-- 右侧歌词区域 -->
@@ -1948,12 +1948,7 @@ function connectStream(){
   startStreamPlayback();
 }
 function resetStreamSource(){
-  const streamAudio=document.getElementById('streamAudio');
-  streamAudio.pause();
-  streamAudio.removeAttribute('src');
-  streamAudio.load();
-  streamAudio.src='http://'+window.location.hostname+':8000/';
-  streamAudio.load();
+  document.getElementById('streamAudio').src='http://'+window.location.hostname+':8000/?_='+Date.now();
 }
 function cmd(c){
   if(c==='toggle'){
@@ -2693,7 +2688,7 @@ async function init(){
     document.getElementById('serviceSelect').value=selectedService;
   }catch(error){}
   const streamAudio=document.getElementById('streamAudio');
-  streamAudio.src='http://'+window.location.hostname+':8000/';
+  streamAudio.src='http://'+window.location.hostname+':8000/?_='+Date.now();
   streamAudio.addEventListener('playing',()=>{
     setStreamStatus('正在接收 MPD 音频流');
   });
