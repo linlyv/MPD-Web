@@ -198,21 +198,30 @@ input { font-family:inherit; outline:none; }
 .expand-sidebar-tab:hover { color:var(--accent); }
 .expand-sidebar-tab.hidden { opacity:0; pointer-events:none; }
 
+/* ── Mobile backdrop ── */
+.mobile-backdrop {
+  display:none;
+  position:fixed; inset:0; z-index:99;
+  background:rgba(0,0,0,.55);
+  transition:opacity .25s ease;
+}
+.mobile-backdrop.show { display:block; }
+
 /* ── Responsive ── */
 @media (max-width:768px) {
   .sidebar {
     position:fixed; right:0; top:0; bottom:0; z-index:100;
-    width:var(--sidebar-w); min-width:0;
+    width:min(85vw, 400px); min-width:0;
     box-shadow:var(--shadow);
     transition:transform .25s ease;
   }
-  .sidebar.collapsed { transform:translateX(100%); width:var(--sidebar-w); min-width:0; opacity:1; pointer-events:none; }
+  .sidebar.collapsed { transform:translateX(100%); width:min(85vw, 400px); min-width:0; opacity:1; pointer-events:none; }
   .resize-handle { display:none; }
   .expand-sidebar-tab { display:block; }
   .video-controls { padding:8px 10px; gap:6px; }
   .volume-slider { width:50px; }
   .time-display { min-width:70px; font-size:11px; }
-  .collapse-sidebar-btn { display:none; }
+  .kbd-hint { display:none; }
 }
 @media (min-width:769px) {
   .expand-sidebar-tab { position:absolute; right:0; top:50%; transform:translateY(-50%); }
@@ -314,6 +323,9 @@ input { font-family:inherit; outline:none; }
 <!-- Resize Handle -->
 <div class="resize-handle" id="resizeHandle"></div>
 
+<!-- Mobile Backdrop -->
+<div class="mobile-backdrop" id="mobileBackdrop" onclick="toggleSidebar()"></div>
+
 <!-- Sidebar -->
 <div class="sidebar" id="sidebar">
   <div class="sidebar-header">
@@ -349,6 +361,7 @@ const sidebar = document.getElementById('sidebar');
 const resizeHandle = document.getElementById('resizeHandle');
 const expandSidebarTab = document.getElementById('expandSidebarTab');
 const collapseSidebarBtn = document.getElementById('collapseSidebarBtn');
+const mobileBackdrop = document.getElementById('mobileBackdrop');
 const ctls = document.getElementById('videoControls');
 
 let currentDir = '';
@@ -357,7 +370,13 @@ let currentVideoIndex = -1;
 let videoDirs = [];
 let isFullscreen = false;
 let isDragging = false;
-let sidebarCollapsed = localStorage.getItem('videoSidebarCollapsed') === '1';
+let isMobile = window.matchMedia('(max-width:768px)').matches;
+
+function getSidebarCollapsed() {
+  if (isMobile) return true;
+  return localStorage.getItem('videoSidebarCollapsed') === '1';
+}
+let sidebarCollapsed = getSidebarCollapsed();
 
 // ═══════════════════════════════════════
 // Sidebar collapse
@@ -368,17 +387,21 @@ function applySidebarState() {
     resizeHandle.classList.add('hidden');
     expandSidebarTab.classList.remove('hidden');
     collapseSidebarBtn.textContent = '▶';
+    mobileBackdrop.classList.remove('show');
   } else {
     sidebar.classList.remove('collapsed');
     resizeHandle.classList.remove('hidden');
     expandSidebarTab.classList.add('hidden');
     collapseSidebarBtn.textContent = '◀';
+    if (isMobile) mobileBackdrop.classList.add('show');
   }
 }
 
 function toggleSidebar() {
   sidebarCollapsed = !sidebarCollapsed;
-  localStorage.setItem('videoSidebarCollapsed', sidebarCollapsed ? '1' : '0');
+  if (!isMobile) {
+    localStorage.setItem('videoSidebarCollapsed', sidebarCollapsed ? '1' : '0');
+  }
   applySidebarState();
 }
 
@@ -386,6 +409,12 @@ collapseSidebarBtn.addEventListener('click', toggleSidebar);
 expandSidebarTab.addEventListener('click', toggleSidebar);
 
 applySidebarState();
+
+window.matchMedia('(max-width:768px)').addEventListener('change', (e) => {
+  isMobile = e.matches;
+  sidebarCollapsed = getSidebarCollapsed();
+  applySidebarState();
+});
 
 // ═══════════════════════════════════════
 // Resize Handle
@@ -517,10 +546,24 @@ progressWrap.addEventListener('mousedown', (e) => {
   progressWrap.classList.add('dragging');
   seekProgress(e);
 });
+progressWrap.addEventListener('touchstart', (e) => {
+  progressDragging = true;
+  progressWrap.classList.add('dragging');
+  seekProgress(e.touches[0]);
+}, {passive: false});
 document.addEventListener('mousemove', (e) => {
   if (progressDragging) seekProgress(e);
 });
+document.addEventListener('touchmove', (e) => {
+  if (progressDragging) { e.preventDefault(); seekProgress(e.touches[0]); }
+}, {passive: false});
 document.addEventListener('mouseup', () => {
+  if (progressDragging) {
+    progressDragging = false;
+    progressWrap.classList.remove('dragging');
+  }
+});
+document.addEventListener('touchend', () => {
   if (progressDragging) {
     progressDragging = false;
     progressWrap.classList.remove('dragging');
