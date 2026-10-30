@@ -1968,6 +1968,8 @@ function cmd(c){
       streamAudio.pause();
       setStreamStatus('本机接收已暂停');
     }else if(!playbackRunning&&httpOutputEnabled){
+      resetStreamSource();
+      streamAutoplayAttempted=false;
       startStreamPlayback();
     }
   }
@@ -2665,7 +2667,7 @@ async function rd(){
   }else{
     playButton.title='播放/暂停';
   }
-  if(playbackRunning&&httpOutputEnabled&&!streamAutoplayAttempted)startStreamPlayback();
+  if(playbackRunning&&httpOutputEnabled&&!streamAutoplayAttempted){resetStreamSource();startStreamPlayback()}
   
   renderLyrics(playbackTimeSeconds);
 
