@@ -2744,6 +2744,11 @@ async function rd(){
     coverMissing();
     if(s.uri)document.getElementById('cover').src='/api/cover?uri='+encodeURIComponent(s.uri);
     else document.getElementById('cover').removeAttribute('src');
+    if(httpOutputEnabled&&playbackRunning){
+      resetStreamSource();
+      streamAutoplayAttempted=false;
+      startStreamPlayback();
+    }
   }
   if(s.uri!==lyricsUri)loadLyrics(s.uri);
   document.getElementById('vol').value=s.volume;
