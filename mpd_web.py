@@ -1963,9 +1963,16 @@ function cmd(c){
       streamAudio.pause();
       setStreamStatus('本机接收已暂停');
     }else if(!playbackRunning&&httpOutputEnabled){
-      resetStreamSource();
-      streamAutoplayAttempted=false;
-      startStreamPlayback();
+      fetch('/api/control/'+c).then(()=>{
+        streamAutoplayAttempted=true;
+        setTimeout(()=>{
+          streamAutoplayAttempted=false;
+          resetStreamSource();
+          startStreamPlayback();
+        }, 200);
+        rd();
+      });
+      return;
     }
   }
   fetch('/api/control/'+c).then(()=>rd());
