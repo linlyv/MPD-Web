@@ -1002,6 +1002,8 @@ def get_audio_devices():
           'description': description.strip(),
         })
 
+  httpd_ports = _get_httpd_ports()
+
   outputs = []
   current = None
   for line in mpc('outputs').splitlines():
@@ -1021,7 +1023,27 @@ def get_audio_devices():
     elif current and line.strip().lower() in ('enabled', 'disabled'):
       current['enabled'] = line.strip().lower() == 'enabled'
       current = None
+  for output in outputs:
+    port = httpd_ports.get(output['name'])
+    if port:
+      output['httpd_port'] = int(port)
   return usb_devices, outputs
+
+def _get_httpd_ports():
+  try:
+    config = Path('/etc/mpd.conf').read_text(encoding='utf-8', errors='replace')
+  except OSError:
+    return {}
+  ports = {}
+  blocks = re.split(r'\n(?=audio_output\s*\{)', config)
+  for block in blocks:
+    if '"httpd"' not in block and "'httpd'" not in block:
+      continue
+    name = _audio_output_value(block, 'name')
+    port = _audio_output_value(block, 'port')
+    if name and port:
+      ports[name] = port
+  return ports
 
 def _audio_output_value(block, key):
   match = re.search(
@@ -1735,7 +1757,7 @@ button{cursor:pointer}
       <button class="icon-btn" id="br" title="重复播放" onclick="cmd('repeat')">↻</button>
     </div>
     <div class="seekrow"><span id="elapsed">0:00</span><div class="pb" id="progress" role="slider" tabindex="0" aria-label="播放进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" onclick="seekTo(event)" onkeydown="seekByKey(event)"><div class="pf" id="pf"></div></div><span id="duration">0:00</span></div>
-    <div class="stream-control"><span id="streamNotice">网页音频状态检测中</span><button id="streamReconnect" type="button" onclick="connectStream()">连接 / 重连声音</button></div>
+    <div class="stream-control"><span id="streamNotice">网页音频状态检测中</span><select id="streamSelector" onchange="switchStream()" style="display:none;background:#2a2a2a;color:#ddd;border:1px solid #555;border-radius:4px;padding:4px 6px;font-size:12px;"></select><button id="streamReconnect" type="button" onclick="connectStream()">连接 / 重连声音</button></div>
     <audio id="streamAudio" preload="auto"></audio>
   </section>
 
@@ -1795,6 +1817,8 @@ let playbackUpdatedAt=performance.now();
 let playbackRunning=false;
 let streamAutoplayAttempted=false;
 let httpOutputEnabled=false;
+let selectedStreamPort='8000';
+let streamOutputs=[];
 let lyricFontSize=15;
 const HTTP_STREAM_BUFFER_SECONDS=6;
 const DEFAULT_HTTP_LYRIC_DELAY_SECONDS=HTTP_STREAM_BUFFER_SECONDS;
@@ -1930,7 +1954,7 @@ async function startStreamPlayback(){
   }catch(error){
     const message=error.name==='NotAllowedError'
       ?'浏览器拦截自动播放，请点击“连接 / 重连声音”'
-      :'HTTP 音频连接失败，请检查 8000 端口和 MPD 输出';
+      :'HTTP 音频连接失败，请检查 MPD HTTP 流输出';
     setStreamStatus(message);
   }
 }
@@ -1948,7 +1972,7 @@ function connectStream(){
   startStreamPlayback();
 }
 function resetStreamSource(){
-  document.getElementById('streamAudio').src='http://'+window.location.hostname+':8000/?_='+Date.now();
+  document.getElementById('streamAudio').src='http://'+window.location.hostname+':'+selectedStreamPort+'/?_='+Date.now();
 }
 function cmd(c){
   if(c==='toggle'){
@@ -2692,7 +2716,7 @@ async function init(){
     document.getElementById('serviceSelect').value=selectedService;
   }catch(error){}
   const streamAudio=document.getElementById('streamAudio');
-  streamAudio.src='http://'+window.location.hostname+':8000/?_='+Date.now();
+  streamAudio.src='http://'+window.location.hostname+':'+selectedStreamPort+'/?_='+Date.now();
   streamAudio.addEventListener('playing',()=>{
     setStreamStatus('正在接收 MPD 音频流');
   });
