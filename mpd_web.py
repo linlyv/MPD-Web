@@ -1964,12 +1964,9 @@ function cmd(c){
       setStreamStatus('本机接收已暂停');
     }else if(!playbackRunning&&httpOutputEnabled){
       fetch('/api/control/'+c).then(()=>{
-        streamAutoplayAttempted=true;
-        setTimeout(()=>{
-          streamAutoplayAttempted=false;
-          resetStreamSource();
-          startStreamPlayback();
-        }, 200);
+        resetStreamSource();
+        streamAutoplayAttempted=false;
+        startStreamPlayback();
         rd();
       });
       return;
