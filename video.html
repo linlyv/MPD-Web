@@ -55,6 +55,45 @@ input { font-family:inherit; outline:none; }
 }
 .video-container.fullscreen video { max-width:100vw; max-height:100vh; border-radius:0; }
 
+/* ── Audio visualizer overlay ── */
+.audio-overlay {
+  display:none; position:absolute; inset:0;
+  align-items:center; justify-content:center;
+  flex-direction:column; gap:16px; z-index:2;
+  background:linear-gradient(135deg, #0d1117 0%, #161b22 50%, #0d1117 100%);
+}
+.audio-overlay.show { display:flex; }
+.audio-overlay .audio-icon {
+  font-size:64px; animation:audioPulse 2s ease-in-out infinite;
+}
+@keyframes audioPulse {
+  0%,100% { transform:scale(1); opacity:.8; }
+  50% { transform:scale(1.15); opacity:1; }
+}
+.audio-visualizer {
+  display:flex; align-items:flex-end; gap:3px; height:40px;
+}
+.audio-visualizer .bar {
+  width:4px; border-radius:2px; background:var(--accent);
+  animation:audioBar 1.2s ease-in-out infinite;
+}
+.audio-visualizer .bar:nth-child(1) { height:12px; animation-delay:0s; }
+.audio-visualizer .bar:nth-child(2) { height:28px; animation-delay:.1s; }
+.audio-visualizer .bar:nth-child(3) { height:18px; animation-delay:.2s; }
+.audio-visualizer .bar:nth-child(4) { height:36px; animation-delay:.3s; }
+.audio-visualizer .bar:nth-child(5) { height:22px; animation-delay:.4s; }
+.audio-visualizer .bar:nth-child(6) { height:30px; animation-delay:.5s; }
+.audio-visualizer .bar:nth-child(7) { height:14px; animation-delay:.6s; }
+.audio-visualizer .bar:nth-child(8) { height:26px; animation-delay:.7s; }
+@keyframes audioBar {
+  0%,100% { transform:scaleY(0.4); }
+  50% { transform:scaleY(1); }
+}
+.audio-overlay .audio-title {
+  font-size:13px; color:var(--muted); max-width:80%;
+  text-align:center; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+}
+
 /* ── Video Controls ── */
 .video-controls {
   background:var(--panel); border-top:1px solid var(--line);
@@ -166,6 +205,7 @@ input { font-family:inherit; outline:none; }
   border-radius:4px; color:var(--accent);
 }
 .video-item.folder .video-item-icon { color:#f0c060; }
+.video-item.audio .video-item-icon { color:#8bc34a; }
 .video-item-info { flex:1; min-width:0; }
 .video-item-title {
   font-size:13px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
@@ -292,6 +332,14 @@ input { font-family:inherit; outline:none; }
   <div id="fsTarget" style="flex:1;display:flex;flex-direction:column;min-height:0;">
     <div class="video-container" id="videoContainer">
       <video id="videoElement" controlsList="nodownload" disablePictureInPicture></video>
+      <div class="audio-overlay" id="audioOverlay">
+        <div class="audio-icon">🎵</div>
+        <div class="audio-visualizer">
+          <div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div>
+          <div class="bar"></div><div class="bar"></div><div class="bar"></div><div class="bar"></div>
+        </div>
+        <div class="audio-title" id="audioTitle"></div>
+      </div>
       <div class="expand-sidebar-tab hidden" id="expandSidebarTab" title="显示视频列表 (L)">▶ 视频列表</div>
     </div>
 
@@ -362,6 +410,8 @@ const resizeHandle = document.getElementById('resizeHandle');
 const expandSidebarTab = document.getElementById('expandSidebarTab');
 const collapseSidebarBtn = document.getElementById('collapseSidebarBtn');
 const mobileBackdrop = document.getElementById('mobileBackdrop');
+const audioOverlay = document.getElementById('audioOverlay');
+const audioTitle = document.getElementById('audioTitle');
 const ctls = document.getElementById('videoControls');
 
 let currentDir = '';
@@ -726,6 +776,13 @@ function playVideo(index) {
     return;
   }
   currentVideoIndex = index;
+  const isAudio = isAudioFile(item.name);
+  if (isAudio) {
+    audioOverlay.classList.add('show');
+    audioTitle.textContent = item.name;
+  } else {
+    audioOverlay.classList.remove('show');
+  }
   videoEl.src = '/api/video/play?path=' + encodeURIComponent(item.path);
   videoEl.load();
   videoEl.play().catch(() => {});
@@ -737,6 +794,7 @@ async function navigateTo(dirPath) {
   currentVideoIndex = -1;
   videoEl.pause();
   videoEl.removeAttribute('src');
+  audioOverlay.classList.remove('show');
   btnPlay.textContent = '▶';
   timeDisplay.textContent = '--:-- / --:--';
   progressFill.style.width = '0%';
@@ -780,7 +838,7 @@ async function loadFiles(dirPath) {
     if (q) url += '&search=' + encodeURIComponent(q);
     const resp = await fetch(url);
     const data = await resp.json();
-    currentItems = (data.items || []).filter(i => i.is_dir || /\.(mp4|webm|mkv|avi|mov|flv|wmv|m4v|ts|mts)$/i.test(i.name));
+    currentItems = (data.items || []).filter(i => i.is_dir || /\.(mp4|webm|mkv|avi|mov|flv|wmv|m4v|ts|mts|mp3|wav|flac|aac|ogg|wma|opus|ape|wv|aiff|alac)$/i.test(i.name));
     renderBreadcrumb(dirPath);
     renderVideoList();
   } catch (e) {
@@ -811,15 +869,16 @@ function renderBreadcrumb(dirPath) {
 
 function renderVideoList() {
   if (currentItems.length === 0) {
-    videoList.innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--muted);">📭 没有找到视频</div>';
+    videoList.innerHTML = '<div style="text-align:center;padding:40px 20px;color:var(--muted);">📭 没有找到媒体文件</div>';
     return;
   }
   let html = '';
   currentItems.forEach((item, index) => {
     const isActive = index === currentVideoIndex;
     const isDir = item.is_dir;
-    const icon = isDir ? '📁' : '🎞';
-    const cls = 'video-item' + (isDir ? ' folder' : '') + (isActive ? ' active' : '');
+    const isAudio = !isDir && isAudioFile(item.name);
+    const icon = isDir ? '📁' : (isAudio ? '🎵' : '🎞');
+    const cls = 'video-item' + (isDir ? ' folder' : '') + (isAudio ? ' audio' : '') + (isActive ? ' active' : '');
     html += '<div class="' + cls + '" onclick="playVideo(' + index + ')" title="' + (item.name || '') + '">';
     html += '<div class="video-item-icon">' + icon + '</div>';
     html += '<div class="video-item-info">';
@@ -836,6 +895,10 @@ function renderVideoList() {
     html += '</div>';
   });
   videoList.innerHTML = html;
+}
+
+function isAudioFile(name) {
+  return /\.(mp3|wav|flac|aac|ogg|wma|m4a|opus|ape|wv|aiff|alac)$/i.test(name);
 }
 
 function formatSize(bytes) {
