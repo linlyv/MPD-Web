@@ -1030,9 +1030,13 @@ def get_audio_devices():
   return usb_devices, outputs
 
 def _get_httpd_ports():
-  try:
-    config = Path('/etc/mpd.conf').read_text(encoding='utf-8', errors='replace')
-  except OSError:
+  for config_path in ('/etc/mpd.conf', '/etc/mpd/mpd.conf', '/var/etc/mpd.conf', '/opt/etc/mpd.conf'):
+    try:
+      config = Path(config_path).read_text(encoding='utf-8', errors='replace')
+      break
+    except OSError:
+      continue
+  else:
     return {}
   ports = {}
   blocks = re.split(r'\n(?=audio_output\s*\{)', config)
@@ -2212,9 +2216,43 @@ async function loadAudio(){
     updateLyricOffsetDisplay();
     return;
   }
-  const httpOutput=data.outputs.find(output=>output.name==='MPD HTTP Stream');
+  streamOutputs=data.outputs.filter(output=>output.httpd_port);
+  if(!streamOutputs.length){
+    const guessPortMap={8000:'MPD FLAC Stream',8001:'MPD HTTP Stream'};
+    const guessed=[];
+    for(const [p,n] of Object.entries(guessPortMap)){
+      const found=data.outputs.find(o=>o.name===n);
+      if(found){found.httpd_port=parseInt(p);guessed.push(found);}
+    }
+    if(guessed.length){streamOutputs=guessed;}
+  }
+  if(!streamOutputs.length){
+    httpOutputEnabled=false;
+    document.getElementById('streamAudio').pause();
+    streamAutoplayAttempted=false;
+    updateLyricOffsetDisplay();
+    setStreamStatus('HTTP 流未启用');
+    return;
+  }
   const wasHttpOutputEnabled=httpOutputEnabled;
-  httpOutputEnabled=Boolean(httpOutput&&httpOutput.enabled);
+  httpOutputEnabled=streamOutputs.some(output=>output.enabled);
+  const selector=document.getElementById('streamSelector');
+  selector.replaceChildren();
+  streamOutputs.forEach(output=>{
+    const option=document.createElement('option');
+    option.value=output.httpd_port;
+    const label=output.name+' ('+(output.httpd_port===8000?'FLAC无损':output.httpd_port===8001?'MP3 192k':'端口'+output.httpd_port)+')';
+    option.textContent=label;
+    option.disabled=!output.enabled;
+    if(String(output.httpd_port)===selectedStreamPort)option.selected=true;
+    selector.appendChild(option);
+  });
+  const hasSelection=streamOutputs.some(o=>String(o.httpd_port)===selectedStreamPort&&o.enabled);
+  if(!hasSelection){
+    const firstEnabled=streamOutputs.find(o=>o.enabled);
+    if(firstEnabled)selectedStreamPort=String(firstEnabled.httpd_port);
+  }
+  selector.style.display=streamOutputs.length>1?'':'none';
   updateLyricOffsetDisplay();
   if(!httpOutputEnabled){
     document.getElementById('streamAudio').pause();
@@ -2230,8 +2268,17 @@ async function loadAudio(){
     if(!playbackRunning)setStreamStatus('HTTP 输出已启用，等待 MPD 播放');
   }
 }
+function switchStream(){
+  const selector=document.getElementById('streamSelector');
+  selectedStreamPort=selector.value;
+  if(httpOutputEnabled&&playbackRunning){
+    resetStreamSource();
+    streamAutoplayAttempted=false;
+    startStreamPlayback();
+  }
+}
 async function selectOutput(name,enabled){
-  const isHttpOutput=name==='MPD HTTP Stream';
+  const isHttpOutput=streamOutputs.some(o=>o.name===name);
   if(isHttpOutput){
     if(enabled){
       streamAutoplayAttempted=false;
