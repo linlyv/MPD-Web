@@ -1835,6 +1835,11 @@ let selectedStreamPort='8000';
 let streamOutputs=[];
 let lyricFontSize=15;
 const HTTP_STREAM_BUFFER_SECONDS=6;
+function streamBufferSeconds(){
+  if(selectedStreamPort==='8002')return 0;
+  if(selectedStreamPort==='8000')return 5;
+  return HTTP_STREAM_BUFFER_SECONDS;
+}
 const DEFAULT_HTTP_LYRIC_DELAY_SECONDS=HTTP_STREAM_BUFFER_SECONDS;
 let lyricOffsetSeconds=0;
 try{
@@ -1898,7 +1903,7 @@ function adjustLyricOffset(delta){
   renderLyrics(elapsed);
 }
 function effectiveLyricOffset(){
-  return lyricOffsetSeconds+(httpOutputEnabled?DEFAULT_HTTP_LYRIC_DELAY_SECONDS:0);
+  return lyricOffsetSeconds+(httpOutputEnabled?streamBufferSeconds():0);
 }
 function updateLyricOffsetDisplay(){
   const offset=effectiveLyricOffset();
@@ -2067,7 +2072,7 @@ function updatePlaybackProgress(){
   const mpdElapsed=playbackTimeSeconds+(playbackRunning?(performance.now()-playbackUpdatedAt)/1000:0);
   const elapsed=Math.max(0,Math.min(
     playbackDurationSeconds,
-    mpdElapsed-(httpOutputEnabled?HTTP_STREAM_BUFFER_SECONDS:0),
+    mpdElapsed-(httpOutputEnabled?streamBufferSeconds():0),
   ));
   const progress=elapsed/playbackDurationSeconds*100;
   document.getElementById('elapsed').textContent=formatTimecode(elapsed);
