@@ -1144,6 +1144,15 @@ def api_audio_select():
   )
   if not selected_output:
     return jsonify(ok=False, error='output is not configured in the selected service'), 404
+
+  httpd_ports = _get_httpd_ports()
+  is_http_output = output_name in httpd_ports
+
+  if enabled and is_http_output:
+    for output in outputs:
+      if output['name'] != output_name and output['name'] in httpd_ports and output['enabled']:
+        mpc('disable', output['id'])
+
   mpc('enable' if enabled else 'disable', selected_output['id'])
   _, updated_outputs = get_audio_devices()
   selected = next(
@@ -1555,10 +1564,7 @@ button{cursor:pointer}
 .play-btn{width:58px;height:58px;border:0;border-radius:50%;background:var(--accent);color:#fff;font-size:24px;box-shadow:0 8px 24px #ed315744}
 .play-btn:hover{background:var(--accent2)}
 .seekrow{width:min(100%,650px);display:grid;grid-template-columns:42px 1fr 42px;gap:12px;align-items:center;margin-top:26px;color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
-.stream-control{display:flex;align-items:center;justify-content:center;gap:10px;min-height:32px;margin-top:8px;color:var(--muted);font-size:12px}
-.stream-control button{border:1px solid var(--line);border-radius:5px;background:var(--panel2);color:#ddd;padding:5px 9px;font-size:12px}
-.stream-control button:hover{border-color:var(--accent);color:#fff}
-.stream-control button:disabled{opacity:.5;cursor:not-allowed}
+.stream-control{display:flex;align-items:center;justify-content:center;gap:4px;min-height:20px;margin-top:6px;color:var(--muted);font-size:11px}
 .pb{height:4px;border-radius:3px;background:#ffffff22;cursor:pointer;touch-action:none;outline:none}
 .pf{height:100%;border-radius:3px;background:var(--accent);width:0;position:relative}
 .pf:after{content:"";position:absolute;right:-5px;top:50%;width:10px;height:10px;transform:translateY(-50%);border-radius:50%;background:#fff;box-shadow:0 0 0 3px #ed315755}
@@ -1645,6 +1651,10 @@ button{cursor:pointer}
 .output-options{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .output-option{display:inline-flex;align-items:center;gap:5px;color:#ddd;white-space:nowrap;cursor:pointer}
 .output-option input{accent-color:var(--accent)}
+.output-option input[type="radio"]{margin:0}
+.stream-select-group{display:inline-flex;align-items:center;gap:4px;border-left:1px solid var(--line);padding-left:12px;margin-left:4px}
+.stream-select-group .stream-label{color:var(--accent);font-size:10px;margin-right:2px}
+.stream-select-group .output-option{font-size:11px}
 .stream-status{font-size:10px}
 .panel-tools{padding:10px 14px;display:grid;gap:8px;border-bottom:1px solid var(--line)}
 .srch input,.plrow input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:5px;background:#111419;color:#fff;font-size:13px;outline:0}
@@ -1761,7 +1771,7 @@ button{cursor:pointer}
       <button class="icon-btn" id="br" title="重复播放" onclick="cmd('repeat')">↻</button>
     </div>
     <div class="seekrow"><span id="elapsed">0:00</span><div class="pb" id="progress" role="slider" tabindex="0" aria-label="播放进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" onclick="seekTo(event)" onkeydown="seekByKey(event)"><div class="pf" id="pf"></div></div><span id="duration">0:00</span></div>
-    <div class="stream-control"><span id="streamNotice">网页音频状态检测中</span><select id="streamSelector" onchange="switchStream()" style="display:none;background:#2a2a2a;color:#ddd;border:1px solid #555;border-radius:4px;padding:4px 6px;font-size:12px;"></select><button id="streamReconnect" type="button" onclick="connectStream()">连接 / 重连声音</button></div>
+    <div class="stream-control"><span id="streamNotice">--</span><a id="streamReconnect" onclick="connectStream()" style="display:none;cursor:pointer;color:var(--accent);margin-left:6px;font-size:12px;">⟳ 重连</a></div>
     <audio id="streamAudio" preload="auto"></audio>
   </section>
 
@@ -1957,7 +1967,7 @@ async function startStreamPlayback(){
     await streamAudio.play();
   }catch(error){
     const message=error.name==='NotAllowedError'
-      ?'浏览器拦截自动播放，请点击“连接 / 重连声音”'
+      ?'浏览器拦截自动播放，请点击“⟳ 重连”'
       :'HTTP 音频连接失败，请检查 MPD HTTP 流输出';
     setStreamStatus(message);
   }
@@ -2197,7 +2207,11 @@ async function loadAudio(){
     options.textContent='MPD 未配置输出设备';
     return;
   }
-  data.outputs.forEach(output=>{
+
+  const httpOutputs=data.outputs.filter(o=>o.httpd_port);
+  const deviceOutputs=data.outputs.filter(o=>!o.httpd_port);
+
+  deviceOutputs.forEach(output=>{
     const label=document.createElement('label');
     label.className='output-option';
     const checkbox=document.createElement('input');
@@ -2209,6 +2223,7 @@ async function loadAudio(){
     label.append(checkbox,name);
     options.appendChild(label);
   });
+
   if(!isMpd){
     httpOutputEnabled=false;
     document.getElementById('streamAudio').pause();
@@ -2216,7 +2231,8 @@ async function loadAudio(){
     updateLyricOffsetDisplay();
     return;
   }
-  streamOutputs=data.outputs.filter(output=>output.httpd_port);
+
+  streamOutputs=httpOutputs;
   if(!streamOutputs.length){
     const guessPortMap={8000:'MPD FLAC Stream',8001:'MPD HTTP Stream'};
     const guessed=[];
@@ -2226,64 +2242,78 @@ async function loadAudio(){
     }
     if(guessed.length){streamOutputs=guessed;}
   }
-  if(!streamOutputs.length){
-    httpOutputEnabled=false;
-    document.getElementById('streamAudio').pause();
-    streamAutoplayAttempted=false;
-    updateLyricOffsetDisplay();
-    setStreamStatus('HTTP 流未启用');
-    return;
-  }
+
   const wasHttpOutputEnabled=httpOutputEnabled;
-  httpOutputEnabled=streamOutputs.some(output=>output.enabled);
-  const selector=document.getElementById('streamSelector');
-  selector.replaceChildren();
-  streamOutputs.forEach(output=>{
-    const option=document.createElement('option');
-    option.value=output.httpd_port;
-    const label=output.name+' ('+(output.httpd_port===8000?'FLAC无损':output.httpd_port===8001?'MP3 192k':'端口'+output.httpd_port)+')';
-    option.textContent=label;
-    option.disabled=!output.enabled;
-    if(String(output.httpd_port)===selectedStreamPort)option.selected=true;
-    selector.appendChild(option);
-  });
-  const hasSelection=streamOutputs.some(o=>String(o.httpd_port)===selectedStreamPort&&o.enabled);
-  if(!hasSelection){
-    const firstEnabled=streamOutputs.find(o=>o.enabled);
-    if(firstEnabled)selectedStreamPort=String(firstEnabled.httpd_port);
+  httpOutputEnabled=streamOutputs.some(o=>o.enabled);
+  const activeStream=streamOutputs.find(o=>o.enabled);
+
+  if(streamOutputs.length>0&&deviceOutputs.length>0){
+    const sep=document.createElement('span');
+    sep.className='stream-select-group';
+    const lbl=document.createElement('span');
+    lbl.className='stream-label';
+    lbl.textContent='音频流';
+    sep.appendChild(lbl);
+    streamOutputs.forEach(output=>{
+      const label=document.createElement('label');
+      label.className='output-option';
+      const radio=document.createElement('input');
+      radio.type='radio';
+      radio.name='httpStream';
+      radio.checked=output.enabled;
+      radio.addEventListener('change',()=>{
+        if(radio.checked)selectStream(output);
+      });
+      const name=document.createElement('span');
+      const labelText=output.httpd_port===8000?'MP3 320k':output.httpd_port===8002?'FLAC 无损':'端口'+output.httpd_port;
+      name.textContent=output.name+' ('+labelText+')';
+      label.append(radio,name);
+      sep.appendChild(label);
+    });
+    options.appendChild(sep);
   }
-  selector.style.display=streamOutputs.length>1?'':'none';
+
   updateLyricOffsetDisplay();
-  if(!httpOutputEnabled){
+  if(!httpOutputEnabled||!activeStream){
     document.getElementById('streamAudio').pause();
     streamAutoplayAttempted=false;
-    setStreamStatus('HTTP 流未启用');
-    document.getElementById('streamReconnect').disabled=true;
-  }else if(!wasHttpOutputEnabled&&playbackRunning){
-    document.getElementById('streamReconnect').disabled=false;
+    setStreamStatus(httpOutputEnabled?'--':'HTTP 流未启用');
+    document.getElementById('streamReconnect').style.display='none';
+  }else{
+    selectedStreamPort=String(activeStream.httpd_port);
+    document.getElementById('streamReconnect').style.display='';
+    if(!wasHttpOutputEnabled&&playbackRunning){
+      streamAutoplayAttempted=false;
+      startStreamPlayback();
+    }else if(!playbackRunning){
+      setStreamStatus(activeStream.name);
+    }
+  }
+}
+
+async function selectStream(output){
+  selectedStreamPort=String(output.httpd_port);
+  document.getElementById('streamAudio').pause();
+  streamAutoplayAttempted=false;
+  httpOutputEnabled=true;
+  const response=await fetch('/api/audio/select',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:output.name,enabled:true})});
+  const result=await response.json();
+  if(!response.ok){alert(result.error||'切换音频流失败');await loadAudio();return}
+  resetStreamSource();
+  setStreamStatus(output.name);
+  if(playbackRunning){
     streamAutoplayAttempted=false;
     startStreamPlayback();
   }else{
-    document.getElementById('streamReconnect').disabled=false;
-    if(!playbackRunning)setStreamStatus('HTTP 输出已启用，等待 MPD 播放');
+    setStreamStatus(output.name+' · 等待播放');
   }
+  await loadAudio();
 }
-function switchStream(){
-  const selector=document.getElementById('streamSelector');
-  selectedStreamPort=selector.value;
-  if(httpOutputEnabled&&playbackRunning){
-    resetStreamSource();
-    streamAutoplayAttempted=false;
-    startStreamPlayback();
-  }
-}
+
 async function selectOutput(name,enabled){
   const isHttpOutput=streamOutputs.some(o=>o.name===name);
   if(isHttpOutput){
-    if(enabled){
-      streamAutoplayAttempted=false;
-      startStreamPlayback();
-    }else{
+    if(!enabled){
       document.getElementById('streamAudio').pause();
       setStreamStatus('HTTP 流未启用');
     }
@@ -2768,7 +2798,7 @@ async function init(){
     setStreamStatus('正在接收 MPD 音频流');
   });
   streamAudio.addEventListener('error',()=>{
-    if(httpOutputEnabled)setStreamStatus('音频流连接失败，请点击“连接 / 重连声音”或检查 MPD 的 8000 端口');
+    if(httpOutputEnabled)setStreamStatus('音频流错误，端口 '+selectedStreamPort+' 无响应，点击重连');
   });
   applyBackground();
   await loadLibrary();
