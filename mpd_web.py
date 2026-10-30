@@ -2775,6 +2775,13 @@ def index(): return render_template_string(PAGE)
 # ---------------- 视频播放功能 ----------------
 VIDEO_DIR = os.environ.get('VIDEO_DIR', '/mnt/usb1_2-1/Video')
 VIDEO_EXTENSIONS = {'.mp4', '.webm', '.mkv', '.avi', '.mov', '.flv', '.wmv', '.m4v', '.ts', '.mts'}
+AUDIO_EXTENSIONS = {'.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma', '.m4a', '.opus', '.ape', '.wv', '.aiff', '.alac'}
+AUDIO_MIME = {
+    '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.flac': 'audio/flac',
+    '.aac': 'audio/aac', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4',
+    '.opus': 'audio/opus',
+}
+NATIVE_AUDIO = {'.mp3', '.wav', '.flac', '.aac', '.ogg', '.m4a', '.opus'}
 
 @app.route('/api/video/list')
 def api_video_list():
@@ -2812,6 +2819,8 @@ def api_video_play():
         ext = full_path.suffix.lower()
         if ext in ('.mp4', '.webm', '.m4v'):
             return send_file(full_path, mimetype=f'video/{ext[1:]}')
+        elif ext in NATIVE_AUDIO:
+            return send_file(full_path, mimetype=AUDIO_MIME.get(ext, 'audio/mpeg'))
         elif ext in VIDEO_EXTENSIONS:
             def generate():
                 cmd = [
@@ -2831,8 +2840,25 @@ def api_video_play():
                 finally:
                     proc.terminate()
             return Response(generate(), mimetype='video/mp4')
+        elif ext in AUDIO_EXTENSIONS:
+            def generate():
+                cmd = [
+                    'ffmpeg', '-i', str(full_path),
+                    '-vn', '-c:a', 'libmp3lame', '-b:a', '192k',
+                    '-f', 'mp3', 'pipe:1'
+                ]
+                proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                try:
+                    while True:
+                        chunk = proc.stdout.read(8192)
+                        if not chunk:
+                            break
+                        yield chunk
+                finally:
+                    proc.terminate()
+            return Response(generate(), mimetype='audio/mpeg')
         else:
-            return jsonify(ok=False, error='不支持的视频格式'), 400
+            return jsonify(ok=False, error='不支持的媒体格式'), 400
     except Exception as e:
         return jsonify(ok=False, error=str(e)), 500
 
